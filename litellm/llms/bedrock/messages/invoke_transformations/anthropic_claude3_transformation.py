@@ -631,14 +631,15 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         def _is_unsupported_block(block: object) -> bool:
             return (
-                isinstance(block, dict)
-                and block.get("type") in BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_CONTENT_BLOCK_TYPES
+                isinstance(block, dict) and block.get("type") in BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_CONTENT_BLOCK_TYPES
             )
 
         def _sanitize(message: object) -> object:
             if not isinstance(message, dict):
                 return message
-            cleaned: Final = {k: v for k, v in message.items() if k != "output_config"}  # mutable-ok: request-body JSON dict
+            cleaned: Final = {
+                k: v for k, v in message.items() if k != "output_config"
+            }  # mutable-ok: request-body JSON dict
             content: Final = message.get("content")
             if isinstance(content, list):
                 cleaned["content"] = [b for b in content if not _is_unsupported_block(b)]  # mutable-ok: JSON list
@@ -648,11 +649,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             if not isinstance(message, dict):
                 return False
             content: Final = message.get("content")
-            return (
-                isinstance(content, list)
-                and len(content) > 0
-                and all(_is_unsupported_block(b) for b in content)
-            )
+            return isinstance(content, list) and len(content) > 0 and all(_is_unsupported_block(b) for b in content)
 
         kept: Final = [_sanitize(m) for m in messages if not _emptied_by_filter(m)]  # mutable-ok: JSON list
         if kept == messages:
@@ -687,7 +684,10 @@ class AmazonAnthropicClaudeMessagesConfig(
             "Bedrock Invoke: mapping unsupported thinking display %r to 'summarized'",
             display,
         )
-        anthropic_messages_request["thinking"] = {**thinking, "display": "summarized"}  # mutable-ok: request-body JSON dict
+        anthropic_messages_request["thinking"] = {
+            **thinking,
+            "display": "summarized",
+        }  # mutable-ok: request-body JSON dict
 
     def _strip_unsupported_bedrock_invoke_fields(
         self,
