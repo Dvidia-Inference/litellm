@@ -3494,3 +3494,145 @@ async def test_get_async_streaming_response_iterator_yields_small_frame_before_u
     remaining: Final = tuple([chunk async for chunk in iterator])
     assert any(chunk.startswith(b"event: message_stop\n") for chunk in remaining), remaining
     await iterator.aclose()
+
+
+def test_bedrock_invoke_drops_nested_message_output_config():
+    """Per-message ``output_config`` (Claude Code's effort stamps) is dropped for
+    Bedrock Invoke; every other key survives and the caller's messages are not
+    mutated."""
+    import copy
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    assistant = {
+        "role": "assistant",
+        "output_config": {"effort": "high"},
+        "content": [{"type": "text", "text": "Reading it now."}],
+    }
+    user = {"role": "user", "content": [{"type": "text", "text": "read /tmp/a.txt"}]}
+    messages = [user, assistant]
+    snapshot = copy.deepcopy(messages)
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 300},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "read /tmp/a.txt"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Reading it now."}]},
+    ]
+    assert messages == snapshot
+    assert messages[0] is user and messages[1] is assistant
+
+
+def test_bedrock_invoke_drops_tool_addition_content_block():
+    """``tool_addition`` blocks are removed from message content for Bedrock
+    Invoke; sibling blocks stay untouched."""
+    import copy
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "read /tmp/a.txt"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_addition", "tool_reference": {"type": "tool_reference", "tool_name": "Read"}},
+                {"type": "text", "text": "hi"},
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "continue"}]},
+    ]
+    snapshot = copy.deepcopy(messages)
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 300},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"][1] == {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}
+    assert messages == snapshot
+
+
+def test_bedrock_invoke_drops_message_left_with_empty_content():
+    """A message whose only content block was unsupported is dropped entirely,
+    and the remaining messages keep their order."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "first"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_addition", "tool_reference": {"type": "tool_reference", "tool_name": "Read"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "second"}]},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 300},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "first"}]},
+        {"role": "user", "content": [{"type": "text", "text": "second"}]},
+    ]
+
+
+def test_bedrock_invoke_maps_unsupported_thinking_display_to_summarized():
+    """``thinking.display: "updates"`` is normalized to ``summarized`` for
+    Bedrock Invoke; the caller's thinking dict is not mutated."""
+    import copy
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {"max_tokens": 300, "thinking": {"type": "adaptive", "display": "updates"}}
+    snapshot = copy.deepcopy(optional_params["thinking"])
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert optional_params["thinking"] == snapshot
+
+
+def test_bedrock_invoke_passes_supported_thinking_display_through():
+    """A ``thinking.display`` value Bedrock accepts (``omitted``) is forwarded
+    unchanged."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 300,
+            "thinking": {"type": "adaptive", "display": "omitted"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "adaptive", "display": "omitted"}

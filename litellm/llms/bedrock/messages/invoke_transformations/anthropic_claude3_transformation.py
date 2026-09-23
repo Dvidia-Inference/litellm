@@ -7,6 +7,8 @@ import httpx
 import litellm
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
+    BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES,
+    BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_CONTENT_BLOCK_TYPES,
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -616,6 +618,77 @@ class AmazonAnthropicClaudeMessagesConfig(
             llm_provider="bedrock",
         )
 
+    @staticmethod
+    def _sanitize_messages_for_bedrock_invoke(anthropic_messages_request: dict) -> None:
+        """Rebuild ``messages`` for the Bedrock Invoke schema: per-message
+        ``output_config`` and content blocks with unsupported ``type`` tags are
+        dropped, and a message left with an empty content list is dropped too.
+        The caller's message dicts are never mutated; the request's ``messages``
+        key is only reassigned when something changed."""
+        messages: Final = anthropic_messages_request.get("messages")
+        if not isinstance(messages, list):
+            return
+
+        def _is_unsupported_block(block: object) -> bool:
+            return (
+                isinstance(block, dict)
+                and block.get("type") in BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_CONTENT_BLOCK_TYPES
+            )
+
+        def _sanitize(message: object) -> object:
+            if not isinstance(message, dict):
+                return message
+            cleaned: Final = {k: v for k, v in message.items() if k != "output_config"}  # mutable-ok: request-body JSON dict
+            content: Final = message.get("content")
+            if isinstance(content, list):
+                cleaned["content"] = [b for b in content if not _is_unsupported_block(b)]  # mutable-ok: JSON list
+            return cleaned
+
+        def _emptied_by_filter(message: object) -> bool:
+            if not isinstance(message, dict):
+                return False
+            content: Final = message.get("content")
+            return (
+                isinstance(content, list)
+                and len(content) > 0
+                and all(_is_unsupported_block(b) for b in content)
+            )
+
+        kept: Final = [_sanitize(m) for m in messages if not _emptied_by_filter(m)]  # mutable-ok: JSON list
+        if kept == messages:
+            return
+        verbose_logger.debug(
+            "Bedrock Invoke: sanitized messages (output_config on indices %s, "
+            "unsupported content block types %s, emptied messages dropped at indices %s)",
+            tuple(i for i, m in enumerate(messages) if isinstance(m, dict) and "output_config" in m),
+            tuple(
+                b.get("type")
+                for m in messages
+                if isinstance(m, dict) and isinstance(m.get("content"), list)
+                for b in m["content"]
+                if _is_unsupported_block(b)
+            ),
+            tuple(i for i, m in enumerate(messages) if _emptied_by_filter(m)),
+        )
+        anthropic_messages_request["messages"] = kept
+
+    @staticmethod
+    def _normalize_thinking_display_for_bedrock_invoke(anthropic_messages_request: dict) -> None:
+        """Map a ``thinking.display`` value Bedrock Invoke rejects onto
+        ``summarized``. The caller's ``thinking`` dict is replaced by a copy,
+        never mutated."""
+        thinking: Final = anthropic_messages_request.get("thinking")
+        if not isinstance(thinking, dict):
+            return
+        display: Final = thinking.get("display")
+        if display is None or display in BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES:
+            return
+        verbose_logger.debug(
+            "Bedrock Invoke: mapping unsupported thinking display %r to 'summarized'",
+            display,
+        )
+        anthropic_messages_request["thinking"] = {**thinking, "display": "summarized"}  # mutable-ok: request-body JSON dict
+
     def _strip_unsupported_bedrock_invoke_fields(
         self,
         anthropic_messages_request: dict,
@@ -695,6 +768,8 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)
         self._remove_ttl_from_cache_control(anthropic_messages_request=anthropic_messages_request, model=model)
+        self._sanitize_messages_for_bedrock_invoke(anthropic_messages_request)
+        self._normalize_thinking_display_for_bedrock_invoke(anthropic_messages_request)
 
         # 5. Route structured-output params (`output_format` /
         # `output_config.format`) to native enforcement or the inline-schema
