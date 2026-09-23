@@ -619,7 +619,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
 
     @staticmethod
-    def _sanitize_messages_for_bedrock_invoke(anthropic_messages_request: dict) -> None:
+    def _sanitize_messages_for_bedrock_invoke(anthropic_messages_request: dict[str, object]) -> None:
         """Rebuild ``messages`` for the Bedrock Invoke schema: per-message
         ``output_config`` and content blocks with unsupported ``type`` tags are
         dropped, and a message left with an empty content list is dropped too.
@@ -630,9 +630,10 @@ class AmazonAnthropicClaudeMessagesConfig(
             return
 
         def _is_unsupported_block(block: object) -> bool:
-            return (
-                isinstance(block, dict) and block.get("type") in BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_CONTENT_BLOCK_TYPES
-            )
+            if not isinstance(block, dict):
+                return False
+            block_type: Final = block.get("type")
+            return isinstance(block_type, str) and block_type in BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_CONTENT_BLOCK_TYPES
 
         def _sanitize(message: object) -> object:
             if not isinstance(message, dict):
@@ -670,7 +671,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         anthropic_messages_request["messages"] = kept
 
     @staticmethod
-    def _normalize_thinking_display_for_bedrock_invoke(anthropic_messages_request: dict) -> None:
+    def _normalize_thinking_display_for_bedrock_invoke(anthropic_messages_request: dict[str, object]) -> None:
         """Map a ``thinking.display`` value Bedrock Invoke rejects onto
         ``summarized``. The caller's ``thinking`` dict is replaced by a copy,
         never mutated."""
@@ -678,7 +679,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not isinstance(thinking, dict):
             return
         display: Final = thinking.get("display")
-        if display is None or display in BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES:
+        if not isinstance(display, str) or display in BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES:
             return
         verbose_logger.debug(
             "Bedrock Invoke: mapping unsupported thinking display %r to 'summarized'",

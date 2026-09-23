@@ -73,6 +73,7 @@ LlmCapability = Literal[
     "long_context_1m",
     "mid_conversation_system",
     "multi_turn",
+    "native_extensions",
     "pdf_input",
     "prompt_cache_1h",
     "prompt_cache_5m",
@@ -153,14 +154,7 @@ class OtherCell(_Base):
 
 
 Cell = Annotated[
-    LlmCell
-    | MgmtCell
-    | McpCell
-    | ReliabilityCell
-    | QuotaCell
-    | LoggingCell
-    | GuardrailCell
-    | OtherCell,
+    LlmCell | MgmtCell | McpCell | ReliabilityCell | QuotaCell | LoggingCell | GuardrailCell | OtherCell,
     Field(discriminator="module"),
 ]
 
