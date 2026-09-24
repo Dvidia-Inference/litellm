@@ -7217,7 +7217,7 @@ def _session_grouped_mock_prisma(session_page_rows, session_total, representativ
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": session_total}]
-        if "DISTINCT ON" in sql_query:
+        if "CROSS JOIN LATERAL" in sql_query or "DISTINCT ON" in sql_query:
             return representative_rows
         if "COALESCE(SUM(spend)" in sql_query:
             return [
@@ -7269,7 +7269,7 @@ def _session_grouped_paginating_prisma(sessions, counted_total=None):
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": min(len(sessions) if counted_total is None else counted_total, params[-1])}]
-        if "DISTINCT ON" in sql_query:
+        if "CROSS JOIN LATERAL" in sql_query or "DISTINCT ON" in sql_query:
             return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
         if "COALESCE(SUM(spend)" in sql_query:
             return []
@@ -7340,11 +7340,12 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
         assert "LIMIT" in count_sql and "FROM (" in count_sql, "the grouped count must stay bounded"
 
         rep_call = emitted[2]
-        assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in rep_call[0]
+        assert "LATERAL" in rep_call[0]
+        assert "DISTINCT ON" not in rep_call[0]
         assert (
-            f"ORDER BY {SESSION_GROUP_KEY_SQL}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC"
-            in rep_call[0]
+            'ORDER BY call_type IN (\'call_mcp_tool\', \'list_mcp_tools\'), "startTime" DESC' in rep_call[0]
         ), "the session representative must prefer the newest non-MCP call"
+        assert "LIMIT 1" in rep_call[0]
         assert rep_call[-2] == ["sess-1", "req-solo"]
         assert rep_call[-1] == ["hashed-key", "hashed-key"]
     finally:

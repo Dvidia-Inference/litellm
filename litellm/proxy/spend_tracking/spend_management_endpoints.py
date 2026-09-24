@@ -2993,17 +2993,18 @@ async def _fetch_session_representatives(
 ) -> list[dict[str, object]]:  # mutable-ok: _build_ui_spend_logs_response writes session counts onto each row
     """Fetch the newest non-MCP row of each ``(session_key, api_key)`` session, in ``session_keys`` order."""
     rep_query: Final = f"""
-        SELECT * FROM (
-            SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
-                {_SPEND_LOG_LIST_COLUMNS}
+        SELECT rep.*
+        FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[]) AS requested(sk, ak)
+        CROSS JOIN LATERAL (
+            SELECT {_SPEND_LOG_LIST_COLUMNS}
             FROM "LiteLLM_SpendLogs"
             WHERE {where_clause}
-              AND (request_id = ANY(${next_param_index}::text[]) OR session_id = ANY(${next_param_index}::text[]))
-              AND ({_SESSION_GROUP_KEY_SQL}) IN (
-                  SELECT * FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[])
-              )
-            ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
-        ) AS session_representatives
+              AND (request_id = requested.sk OR session_id = requested.sk)
+              AND api_key = requested.ak
+              AND {_SESSION_KEY_EXPR} = requested.sk
+            ORDER BY call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
+            LIMIT 1
+        ) AS rep
     """
     rep_rows: Final[Sequence[dict[str, object]]] = await _query_raw(  # mutable-ok: rows are enriched in place
         prisma_client,

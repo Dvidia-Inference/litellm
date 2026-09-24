@@ -539,7 +539,7 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": 60}]
-        if "DISTINCT ON" in sql_query:
+        if "CROSS JOIN LATERAL" in sql_query:
             return representative_rows
         return session_rows
 
@@ -585,10 +585,16 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     assert count_call[-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1
 
     rep_sql = emitted[2][0]
-    assert f"DISTINCT ON ({group_key})" in rep_sql, f"page must return one row per session. SQL was:\n{rep_sql}"
-    assert f"ORDER BY {group_key}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC" in rep_sql, (
-        "the session representative must prefer the newest non-MCP call"
+    assert "LATERAL" in rep_sql, f"page must look up each session representative per key. SQL was:\n{rep_sql}"
+    assert "DISTINCT ON" not in rep_sql
+    assert "= ANY(" not in rep_sql, (
+        "the per-session lookup must be driven by equality on the requested keys "
+        "so the planner cannot fall back to scanning the date window"
     )
+    assert 'ORDER BY call_type IN (\'call_mcp_tool\', \'list_mcp_tools\'), "startTime" DESC' in rep_sql
+    assert "LIMIT 1" in rep_sql
+    assert emitted[2][-2] == [row["session_key"] for row in session_rows[:50]]
+    assert emitted[2][-1] == ["k"] * 50
     assert "COUNT(*) OVER ()" not in rep_sql
 
     assert [row["request_id"] for row in response["data"]] == ["req-1", "req-2"]

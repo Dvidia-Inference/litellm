@@ -219,6 +219,18 @@ def test_session_view_cursor_page_reads_a_bounded_slice(gateway: Gateway, seeded
     )
 
 
+def test_session_view_repeated_page_stays_bounded_under_the_generic_plan(gateway: Gateway, seeded: str) -> None:
+    """The proxy runs these as prepared statements and Postgres switches to a generic plan after five executions, so a plan that only looks good with literal values shows up here."""
+    for _ in range(19):
+        _session_page(gateway, page="1")
+    before: Final = _tuples_read_quiet()
+    _session_page(gateway, page="1")
+    tuples_read: Final = _tuples_read_quiet() - before
+    assert tuples_read < MAX_TUPLES_PER_PAGE, (
+        f"the 20th page read {tuples_read} tuples for a window of {SEED_ROWS} rows and page_size {PAGE_SIZE}"
+    )
+
+
 def test_session_view_uses_newest_row_inside_the_window(gateway: Gateway, seeded: str) -> None:
     page: Final = _session_page(gateway, page="1", session_id=f"{seeded}-straddle")
     assert page["total"] == 1
