@@ -3670,7 +3670,9 @@ def test_bedrock_invoke_sanitizers_leave_non_json_object_shapes_alone(request_bo
         if isinstance(message, dict):
             message.pop("output_config", None)
 
-    AmazonAnthropicClaudeMessagesConfig._sanitize_messages_for_bedrock_invoke(request_body)
+    AmazonAnthropicClaudeMessagesConfig._sanitize_messages_for_bedrock_invoke(
+        request_body, model="us.anthropic.claude-opus-4-7", drop_params=True
+    )
     AmazonAnthropicClaudeMessagesConfig._normalize_thinking_display_for_bedrock_invoke(request_body)
 
     assert request_body == expected
