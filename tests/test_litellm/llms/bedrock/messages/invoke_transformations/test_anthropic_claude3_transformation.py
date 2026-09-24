@@ -3565,3 +3565,27 @@ def test_bedrock_invoke_tolerates_unhashable_discriminator_values():
         "content": [{"type": ["bogus"]}, {"type": "text", "text": "ok"}],
     }
     assert result["thinking"] == {"type": "adaptive", "display": ["updates"]}
+
+
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {"messages": "not a list", "thinking": "not a dict"},
+        {"messages": ["bare string", 7, None], "thinking": {"type": "adaptive"}},
+        {"messages": [{"role": "assistant", "content": ["bare string", 7, {"type": "text", "text": "ok"}]}]},
+        {"messages": [{"role": "assistant", "content": "plain string content", "output_config": {"effort": "high"}}]},
+    ],
+)
+def test_bedrock_invoke_sanitizers_leave_non_json_object_shapes_alone(request_body):
+    snapshot = copy.deepcopy(request_body)
+    expected = copy.deepcopy(request_body)
+    for message in expected.get("messages", []) if isinstance(expected.get("messages"), list) else []:
+        if isinstance(message, dict):
+            message.pop("output_config", None)
+
+    AmazonAnthropicClaudeMessagesConfig._sanitize_messages_for_bedrock_invoke(request_body)
+    AmazonAnthropicClaudeMessagesConfig._normalize_thinking_display_for_bedrock_invoke(request_body)
+
+    assert request_body == expected
+    if "output_config" not in str(snapshot):
+        assert request_body == snapshot
