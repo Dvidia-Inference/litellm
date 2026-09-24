@@ -973,6 +973,7 @@ class SpendLogRow(BaseModel):
     proxy_server_request: JsonValue = None
     response: JsonValue = None
     litellm_call_id: str | None = None
+    start_time: datetime | None = Field(default=None, validation_alias=AliasChoices("startTime", "start_time"))
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
@@ -1020,6 +1021,27 @@ class SpendLogsPage(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class SessionViewPageParams(BaseModel):
+    """Query for the session-grouped read on /spend/logs/ui, the shape the
+    Admin UI logs page's session view issues."""
+
+    group_by_session: bool = True
+    page: int = 1
+    page_size: int
+    sort_by: str = "startTime"
+    sort_order: str = "desc"
+    start_date: str
+    end_date: str
+    session_cursor: str | None = None
+
+
+class SessionViewPage(BaseModel):
+    data: list[SpendLogRow] = []
+    total: int
+    has_more: bool
+    next_session_cursor: str | None = None
 
 
 # ---------- spend calculate ----------

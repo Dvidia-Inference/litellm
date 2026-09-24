@@ -42,6 +42,8 @@ from models import (
     KeyGenerateBody,
     KeyGenerateResponse,
     OpenAPISchema,
+    SessionViewPage,
+    SessionViewPageParams,
     SpendCalculateBody,
     SpendCalculateResponse,
     SpendLogRow,
@@ -63,9 +65,9 @@ METRICS_PATH: Final = "/metrics/"
 
 __all__ = [
     "BatchCreateBody",
+    "BatchObject",
     "CallbackLogMetadata",
     "CallbackLogPayload",
-    "BatchObject",
     "DailyActivityKeyBreakdown",
     "FileObject",
     "ProbeResult",
@@ -263,16 +265,10 @@ class SpendClient:
             _chat_body(model, content, max_tokens=max_tokens, tags=tags, user=user, cache=cache),
         )
 
-    def chat_stream(
-        self, key: str, model: str, content: str, *, max_tokens: int | None = None
-    ) -> StreamingResponse:
-        return self.proxy.chat_stream(
-            key, _chat_body(model, content, max_tokens=max_tokens, stream=True)
-        )
+    def chat_stream(self, key: str, model: str, content: str, *, max_tokens: int | None = None) -> StreamingResponse:
+        return self.proxy.chat_stream(key, _chat_body(model, content, max_tokens=max_tokens, stream=True))
 
-    def messages_stream(
-        self, key: str, model: str, content: str, *, max_tokens: int
-    ) -> StreamingResponse:
+    def messages_stream(self, key: str, model: str, content: str, *, max_tokens: int) -> StreamingResponse:
         return self.proxy.messages_stream(
             key,
             AnthropicMessagesBody(
@@ -293,18 +289,14 @@ class SpendClient:
         min_rows: int = 1,
         predicate: Callable[[list[SpendLogRow]], bool] | None = None,
     ) -> list[SpendLogRow]:
-        return self.proxy.poll_logs_for_key(
-            key, min_rows=min_rows, predicate=predicate
-        )
+        return self.proxy.poll_logs_for_key(key, min_rows=min_rows, predicate=predicate)
 
     def calculate_spend(self, model: str, content: str) -> float:
         return unwrap(
             self.proxy.transport.post(
                 "/spend/calculate",
                 headers=self.proxy.transport.master,
-                json=SpendCalculateBody(
-                    model=model, messages=[ChatMessage(role="user", content=content)]
-                ),
+                json=SpendCalculateBody(model=model, messages=[ChatMessage(role="user", content=content)]),
                 response_type=SpendCalculateResponse,
             )
         ).cost
@@ -327,9 +319,7 @@ class SpendClient:
         deadline = time.monotonic() + self.proxy.poll_timeout
         entry: TagSpend | None = None
         while time.monotonic() < deadline:
-            matches = [
-                t for t in self.spend_by_tags() if t.individual_request_tag == tag
-            ]
+            matches = [t for t in self.spend_by_tags() if t.individual_request_tag == tag]
             if matches:
                 entry = matches[0]
                 if (entry.total_spend or 0.0) >= minimum:
@@ -383,9 +373,7 @@ class SpendClient:
             }
         )
 
-    def spend_logs_page(
-        self, *, api_key: str | None, page: int, page_size: int
-    ) -> SpendLogsPage:
+    def spend_logs_page(self, *, api_key: str | None, page: int, page_size: int) -> SpendLogsPage:
         """One page of /spend/logs/v2 over a window wide enough to contain every
         row this test run wrote (the endpoint requires explicit dates)."""
         now = datetime.now(timezone.utc)
@@ -402,6 +390,32 @@ class SpendClient:
                     api_key=api_key,
                 ),
                 response_type=SpendLogsPage,
+            )
+        )
+
+    def session_view_page(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        page: int,
+        page_size: int,
+        session_cursor: str | None = None,
+    ) -> SessionViewPage:
+        """One page of the session-grouped /spend/logs/ui read the Admin UI's
+        session view issues."""
+        return unwrap(
+            self.proxy.transport.get(
+                "/spend/logs/ui",
+                headers=self.proxy.transport.master,
+                params=SessionViewPageParams(
+                    page=page,
+                    page_size=page_size,
+                    start_date=start.strftime("%Y-%m-%d %H:%M:%S"),
+                    end_date=end.strftime("%Y-%m-%d %H:%M:%S"),
+                    session_cursor=session_cursor,
+                ),
+                response_type=SessionViewPage,
             )
         )
 

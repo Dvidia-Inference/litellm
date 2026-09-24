@@ -67,6 +67,25 @@ SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
 
 _SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
 _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
+
+
+def _session_head_row_sql(where_clause: str) -> str:
+    """Row-level predicate for 'this row is the newest row of its session inside the filter'.
+
+    Singleton rows are trivially their own newest; session rows are the newest
+    iff no row of the same ``(session_id, api_key)`` matching the same filter
+    is newer, ties broken by ``request_id``. Inside the NOT EXISTS, unqualified
+    columns bind to ``newer``, so ``where_clause`` filters the inner rows."""
+    return f"""(
+        NULLIF(session_id, '') IS NULL
+        OR NOT EXISTS (
+            SELECT 1 FROM "LiteLLM_SpendLogs" AS newer
+            WHERE newer.session_id = "LiteLLM_SpendLogs".session_id
+              AND newer.api_key = "LiteLLM_SpendLogs".api_key
+              AND {where_clause}
+              AND (newer."startTime", newer.request_id) > ("LiteLLM_SpendLogs"."startTime", "LiteLLM_SpendLogs".request_id)
+        )
+    )"""
 _MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
 _AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
 _BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
@@ -2984,6 +3003,7 @@ async def _fetch_session_representatives(
                 {_SPEND_LOG_LIST_COLUMNS}
             FROM "LiteLLM_SpendLogs"
             WHERE {where_clause}
+              AND (request_id = ANY(${next_param_index}::text[]) OR session_id = ANY(${next_param_index}::text[]))
               AND ({_SESSION_GROUP_KEY_SQL}) IN (
                   SELECT * FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[])
               )
@@ -3016,7 +3036,7 @@ async def _count_grouped_sessions(
             SELECT 1
             FROM "LiteLLM_SpendLogs"
             WHERE {where_clause}
-            GROUP BY {_SESSION_GROUP_KEY_SQL}
+              AND {_session_head_row_sql(where_clause)}
             LIMIT ${next_param_index}
         ) AS bounded_sessions
     """
@@ -3067,8 +3087,8 @@ async def _ui_session_grouped_spend_logs(
     direction: Final = "DESC" if sort_desc else "ASC"
 
     cursor: Final = _parse_session_cursor(session_cursor)
-    having_clause: Final = (
-        f'HAVING (MAX("startTime"), {_SESSION_GROUP_KEY_SQL}) {cmp_op} '
+    keyset_clause: Final = (
+        f'AND ("startTime", {_SESSION_KEY_EXPR}, api_key) {cmp_op} '
         f"(${next_param_index}::timestamp, ${next_param_index + 1}, ${next_param_index + 2})"
         if cursor
         else ""
@@ -3083,12 +3103,12 @@ async def _ui_session_grouped_spend_logs(
     page_query: Final = f"""
         SELECT {_SESSION_KEY_EXPR} AS session_key,
                api_key,
-               MAX("startTime")::text AS last_activity
+               "startTime"::text AS last_activity
         FROM "LiteLLM_SpendLogs"
         WHERE {where_clause}
-        GROUP BY {_SESSION_GROUP_KEY_SQL}
-        {having_clause}
-        ORDER BY MAX("startTime") {direction}, {_SESSION_KEY_EXPR} {direction}, api_key {direction}
+          AND {_session_head_row_sql(where_clause)}
+          {keyset_clause}
+        ORDER BY "startTime" {direction}, {_SESSION_KEY_EXPR} {direction}, api_key {direction}
         LIMIT ${limit_index} {offset_clause}
     """
     page_rows: Final[Sequence[_SessionPageRow]] = (
