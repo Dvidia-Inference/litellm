@@ -425,8 +425,8 @@ class SpendClient:
                 params=SessionViewPageParams(
                     page=page,
                     page_size=page_size,
-                    start_date=start.strftime("%Y-%m-%d %H:%M:%S"),
-                    end_date=end.strftime("%Y-%m-%d %H:%M:%S"),
+                    start_date=start,
+                    end_date=end,
                     session_cursor=session_cursor,
                 ),
                 response_type=SessionViewPage,

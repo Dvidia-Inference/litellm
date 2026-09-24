@@ -18,6 +18,7 @@ from pydantic import (
     Field,
     JsonValue,
     RootModel,
+    field_serializer,
     model_serializer,
     model_validator,
 )
@@ -1030,11 +1031,17 @@ class SessionViewPageParams(BaseModel):
     group_by_session: bool = True
     page: int = 1
     page_size: int
-    sort_by: str = "startTime"
-    sort_order: str = "desc"
-    start_date: str
-    end_date: str
+    sort_by: Literal["startTime", "endTime", "spend", "total_tokens", "request_duration_ms", "model", "ttft_ms"] = (
+        "startTime"
+    )
+    sort_order: Literal["asc", "desc"] = "desc"
+    start_date: datetime
+    end_date: datetime
     session_cursor: str | None = None
+
+    @field_serializer("start_date", "end_date")
+    def _serialize_window_date(self, value: datetime) -> str:
+        return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
 class SessionViewPage(BaseModel):

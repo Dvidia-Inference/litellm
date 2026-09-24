@@ -2,8 +2,9 @@
 
 The Admin UI session view hits /spend/logs/ui?group_by_session=true. On main
 the page query aggregates every row in the start/end window before LIMIT, so
-page 1 reads the whole window. These tests seed 40000 one-row sessions and
-count the LiteLLM_SpendLogs tuples Postgres reports read for a single page
+page 1 reads the whole window. These tests seed 40000 rows in 5-row sessions
+plus one 5000-row session at the top of the window, and count the
+LiteLLM_SpendLogs tuples Postgres reports read for a single page
 request; a bounded implementation reads only the page's share.
 """
 
@@ -21,7 +22,7 @@ from session_view_db import (
 )
 from spend_e2e_client import SpendClient, unique_marker
 
-MAX_TUPLES_PER_PAGE: Final = SESSION_VIEW_SEED_ROWS // 2
+MAX_TUPLES_PER_PAGE: Final = SESSION_VIEW_SEED_ROWS + SESSION_VIEW_SEED_ROWS // 4
 PAGE_SIZE: Final = 50
 
 
@@ -34,8 +35,8 @@ class SeededWindow:
 @pytest.fixture
 def seeded_window(resources: ResourceManager) -> SeededWindow:
     marker: Final = unique_marker()
-    start, end = seed_session_view_rows(marker, api_key_marker=f"e2e-sesswin-key-{marker}")
     resources.defer(lambda: delete_session_view_rows(marker))
+    start, end = seed_session_view_rows(marker, api_key_marker=f"e2e-sesswin-key-{marker}")
     return SeededWindow(start=start, end=end + timedelta(seconds=1))
 
 
@@ -54,8 +55,8 @@ class TestSessionViewFirstPageCost:
 
         assert len(page.data) == PAGE_SIZE
         assert page.has_more is True
-        start_times: Final = tuple(t for row in page.data if (t := row.start_time) is not None)
-        assert len(start_times) == PAGE_SIZE, "a row is missing startTime"
+        assert all(row.start_time is not None for row in page.data), "a row is missing startTime"
+        start_times: Final = tuple(row.start_time for row in page.data if row.start_time is not None)
         assert start_times == tuple(sorted(start_times, reverse=True)), "rows not newest-first"
         assert page.data[0].start_time is not None and page.data[0].start_time >= seeded_window.end - timedelta(
             seconds=1

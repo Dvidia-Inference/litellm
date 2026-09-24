@@ -13,8 +13,16 @@ not be wiped by a routine local run that merely exercised a test.
 
 import os
 from collections.abc import Callable
+from typing import Final
 
 RESET_OPT_IN_ENV = "E2E_RESET_SPEND_LOGS"
+
+DEFAULT_DATABASE_URL: Final = "postgresql://llmproxy:dbpassword9090@localhost:5432/litellm"
+
+
+def database_url() -> str:
+    """DATABASE_URL, defaulting to the local docker postgres on its mapped host port."""
+    return os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
 
 
 def run_spend_log_cleanup(
@@ -48,9 +56,5 @@ def reset_spend_logs() -> None:
     """
     import psycopg
 
-    url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql://llmproxy:dbpassword9090@localhost:5432/litellm",
-    )
-    with psycopg.connect(url) as conn:
+    with psycopg.connect(database_url()) as conn:
         _ = conn.execute('TRUNCATE TABLE "LiteLLM_SpendLogs"')
