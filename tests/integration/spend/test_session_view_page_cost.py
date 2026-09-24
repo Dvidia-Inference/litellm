@@ -9,11 +9,13 @@ behavior that must survive the optimization.
 import os
 import time
 import uuid
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import psycopg
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import Gateway, string_value
+from pydantic import JsonValue, TypeAdapter
 
 SEED_ROWS: Final = 40_000
 PAGE_SIZE: Final = 50
@@ -84,7 +86,6 @@ def _settle_autovacuum() -> None:
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
         connection.execute('ALTER TABLE "LiteLLM_SpendLogs" SET (autovacuum_enabled = false)')
         connection.execute('VACUUM ANALYZE "LiteLLM_SpendLogs"')
-        connection.execute('ANALYZE "LiteLLM_SpendLogs"')
 
 
 def _cleanup(marker: str) -> None:
@@ -141,7 +142,14 @@ def _tuples_read_quiet() -> int:
     raise AssertionError("pg_stat counters never settled")
 
 
-def _session_page(gateway: Gateway, **extra: str) -> dict:
+_ROWS: Final = TypeAdapter(list[dict[str, JsonValue]])
+
+
+def _data_rows(page: Mapping[str, JsonValue]) -> list[dict[str, JsonValue]]:
+    return _ROWS.validate_python(page["data"])
+
+
+def _session_page(gateway: Gateway, **extra: str) -> dict[str, JsonValue]:
     return gateway.get(
         "/spend/logs/ui",
         params={
@@ -157,7 +165,7 @@ def _session_page(gateway: Gateway, **extra: str) -> dict:
 
 
 @pytest.fixture
-def seeded(gateway: Gateway):
+def seeded(gateway: Gateway) -> Iterator[str]:
     marker: Final = uuid.uuid4().hex
     with gateway.scenario() as scenario:
         scenario.cleanups.callback(_cleanup, marker)
@@ -176,15 +184,15 @@ def test_session_view_first_page_reads_a_bounded_slice(gateway: Gateway, seeded:
     assert page["has_more"] is True
     assert page["total"] == 10000
     assert page["total_is_capped"] is True
-    data: Final = page["data"]
+    data: Final = _data_rows(page)
     assert len(data) == PAGE_SIZE
     assert data[0]["request_id"] == f"intg-sesswin-{seeded}-m1c", (
         "multi-row session must be represented by its newest row"
     )
     assert data[1]["request_id"] == f"intg-sesswin-{seeded}-m2b"
-    assert all(row.get("session_id") is None for row in data[2:]), "singleton rows must follow, newest first"
+    assert all(row["session_id"] is None for row in data[2:]), "singleton rows must follow, newest first"
     assert data[2]["request_id"] == f"intg-sesswin-{seeded}-{SEED_ROWS}"
-    start_times: Final = [row["startTime"] for row in data]
+    start_times: Final = [string_value(row["startTime"]) for row in data]
     assert start_times == sorted(start_times, reverse=True)
     assert tuples_read < MAX_TUPLES_PER_PAGE, (
         f"first page read {tuples_read} tuples for a window of {SEED_ROWS} rows and page_size {PAGE_SIZE}"
@@ -194,15 +202,16 @@ def test_session_view_first_page_reads_a_bounded_slice(gateway: Gateway, seeded:
 def test_session_view_cursor_page_reads_a_bounded_slice(gateway: Gateway, seeded: str) -> None:
     first: Final = _session_page(gateway, page="1")
     cursor: Final = first["next_session_cursor"]
-    assert cursor is not None
+    assert isinstance(cursor, str)
 
     before: Final = _tuples_read_quiet()
     second: Final = _session_page(gateway, page="2", session_cursor=cursor)
     tuples_read: Final = _tuples_read_quiet() - before
 
-    assert len(second["data"]) == PAGE_SIZE
-    oldest_first: Final = first["data"][-1]["startTime"]
-    assert all(row["startTime"] < oldest_first for row in second["data"])
+    second_data: Final = _data_rows(second)
+    assert len(second_data) == PAGE_SIZE
+    oldest_first: Final = string_value(_data_rows(first)[-1]["startTime"])
+    assert all(string_value(row["startTime"]) < oldest_first for row in second_data)
     assert tuples_read < MAX_TUPLES_PER_PAGE, (
         f"cursor page read {tuples_read} tuples for a window of {SEED_ROWS} rows and page_size {PAGE_SIZE}"
     )
@@ -211,5 +220,6 @@ def test_session_view_cursor_page_reads_a_bounded_slice(gateway: Gateway, seeded
 def test_session_view_uses_newest_row_inside_the_window(gateway: Gateway, seeded: str) -> None:
     page: Final = _session_page(gateway, page="1", session_id=f"{seeded}-straddle")
     assert page["total"] == 1
-    assert [row["request_id"] for row in page["data"]] == [f"intg-straddle-{seeded}-in"]
-    assert page["data"][0]["startTime"].startswith("2001-01-01")
+    data: Final = _data_rows(page)
+    assert [row["request_id"] for row in data] == [f"intg-straddle-{seeded}-in"]
+    assert string_value(data[0]["startTime"]).startswith("2001-01-01")
