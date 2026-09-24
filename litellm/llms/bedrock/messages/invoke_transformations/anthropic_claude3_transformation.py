@@ -652,7 +652,11 @@ class AmazonAnthropicClaudeMessagesConfig(
             else ()
         )
         thinking: Final = anthropic_messages_request.get("thinking")
-        display: Final = cast(object, thinking.get("display") if isinstance(thinking, dict) else None)
+        display: Final = (
+            cast(  # cast-ok: thinking.get() on an untyped dict is partially unknown; only used after isinstance checks
+                object, thinking.get("display") if isinstance(thinking, dict) else None
+            )
+        )
         offenders: Final = message_offenders + (
             (f"thinking.display (value '{display}')",)
             if isinstance(display, str) and display not in BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES
