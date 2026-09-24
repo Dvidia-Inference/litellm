@@ -84,18 +84,20 @@ def _seed_straddler(marker: str) -> None:
 
 def _settle_autovacuum() -> None:
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
-        connection.execute('ALTER TABLE "LiteLLM_SpendLogs" SET (autovacuum_enabled = false)')
         connection.execute('VACUUM ANALYZE "LiteLLM_SpendLogs"')
+        connection.execute('ALTER TABLE "LiteLLM_SpendLogs" SET (autovacuum_enabled = false)')
 
 
 def _cleanup(marker: str) -> None:
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
-        connection.execute(
-            'DELETE FROM "LiteLLM_SpendLogs" WHERE request_id LIKE %s OR request_id LIKE %s',
-            (f"intg-sesswin-{marker}-%", f"intg-straddle-{marker}-%"),
-        )
-        connection.execute('VACUUM "LiteLLM_SpendLogs"')
-        connection.execute('ALTER TABLE "LiteLLM_SpendLogs" RESET (autovacuum_enabled)')
+        try:
+            connection.execute(
+                'DELETE FROM "LiteLLM_SpendLogs" WHERE request_id LIKE %s OR request_id LIKE %s',
+                (f"intg-sesswin-{marker}-%", f"intg-straddle-{marker}-%"),
+            )
+            connection.execute('VACUUM "LiteLLM_SpendLogs"')
+        finally:
+            connection.execute('ALTER TABLE "LiteLLM_SpendLogs" RESET (autovacuum_enabled)')
     _wait_for_stats_quiet()
 
 

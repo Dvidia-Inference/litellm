@@ -48,19 +48,21 @@ def seed_session_view_rows(marker: str, api_key_marker: str) -> tuple[datetime, 
             ),
         )
     with psycopg.connect(_database_url(), autocommit=True) as conn:
-        _ = conn.execute('ALTER TABLE "LiteLLM_SpendLogs" SET (autovacuum_enabled = false)')
         _ = conn.execute('VACUUM ANALYZE "LiteLLM_SpendLogs"')
+        _ = conn.execute('ALTER TABLE "LiteLLM_SpendLogs" SET (autovacuum_enabled = false)')
     return start, end
 
 
 def delete_session_view_rows(marker: str) -> None:
     with psycopg.connect(_database_url(), autocommit=True) as conn:
-        _ = conn.execute(
-            'DELETE FROM "LiteLLM_SpendLogs" WHERE request_id LIKE %s',
-            (f"{SESSION_VIEW_REQUEST_PREFIX}-{marker}-%",),
-        )
-        _ = conn.execute('VACUUM "LiteLLM_SpendLogs"')
-        _ = conn.execute('ALTER TABLE "LiteLLM_SpendLogs" RESET (autovacuum_enabled)')
+        try:
+            _ = conn.execute(
+                'DELETE FROM "LiteLLM_SpendLogs" WHERE request_id LIKE %s',
+                (f"{SESSION_VIEW_REQUEST_PREFIX}-{marker}-%",),
+            )
+            _ = conn.execute('VACUUM "LiteLLM_SpendLogs"')
+        finally:
+            _ = conn.execute('ALTER TABLE "LiteLLM_SpendLogs" RESET (autovacuum_enabled)')
     _wait_for_stats_quiet()
 
 
