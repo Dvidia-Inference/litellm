@@ -3415,36 +3415,65 @@ async def test_get_async_streaming_response_iterator_yields_small_frame_before_u
     await iterator.aclose()
 
 
-def test_bedrock_invoke_drops_nested_message_output_config():
+def test_bedrock_invoke_rejects_nested_output_config_without_drop_params(monkeypatch):
+    import litellm
     from litellm.types.router import GenericLiteLLMParams
 
+    monkeypatch.setattr(litellm, "drop_params", False)
     cfg = AmazonAnthropicClaudeMessagesConfig()
-    assistant = {
-        "role": "assistant",
-        "output_config": {"effort": "high"},
-        "content": [{"type": "text", "text": "Reading it now."}],
-    }
-    user = {"role": "user", "content": [{"type": "text", "text": "read /tmp/a.txt"}]}
-    messages = [user, assistant]
-    snapshot = copy.deepcopy(messages)
-
-    result = cfg.transform_anthropic_messages_request(
-        model="us.anthropic.claude-opus-4-7",
-        messages=messages,
-        anthropic_messages_optional_request_params={"max_tokens": 300},
-        litellm_params=GenericLiteLLMParams(),
-        headers={},
-    )
-
-    assert result["messages"] == [
+    messages = [
         {"role": "user", "content": [{"type": "text", "text": "read /tmp/a.txt"}]},
-        {"role": "assistant", "content": [{"type": "text", "text": "Reading it now."}]},
+        {
+            "role": "assistant",
+            "output_config": {"effort": "high"},
+            "content": [{"type": "text", "text": "Reading it now."}],
+        },
     ]
-    assert messages == snapshot
-    assert messages[0] is user and messages[1] is assistant
+
+    with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+        cfg.transform_anthropic_messages_request(
+            model="us.anthropic.claude-opus-4-7",
+            messages=messages,
+            anthropic_messages_optional_request_params={"max_tokens": 300},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert "messages[1].output_config" in str(exc_info.value)
+    assert "drop_params" in str(exc_info.value)
 
 
-def test_bedrock_invoke_drops_tool_addition_content_block():
+def test_bedrock_invoke_rejects_tool_addition_block_without_drop_params(monkeypatch):
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "read /tmp/a.txt"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "hi"},
+                {"type": "tool_addition", "tool_reference": {"type": "tool_reference", "tool_name": "Read"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "continue"}]},
+    ]
+
+    with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+        cfg.transform_anthropic_messages_request(
+            model="us.anthropic.claude-opus-4-7",
+            messages=messages,
+            anthropic_messages_optional_request_params={"max_tokens": 300},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert "messages[1].content[1]" in str(exc_info.value)
+
+
+def test_bedrock_invoke_drop_params_strips_extensions_but_never_messages():
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -3452,6 +3481,7 @@ def test_bedrock_invoke_drops_tool_addition_content_block():
         {"role": "user", "content": [{"type": "text", "text": "read /tmp/a.txt"}]},
         {
             "role": "assistant",
+            "output_config": {"effort": "high"},
             "content": [
                 {"type": "tool_addition", "tool_reference": {"type": "tool_reference", "tool_name": "Read"}},
                 {"type": "text", "text": "hi"},
@@ -3459,23 +3489,32 @@ def test_bedrock_invoke_drops_tool_addition_content_block():
         },
         {"role": "user", "content": [{"type": "text", "text": "continue"}]},
     ]
+    optional_params = {"max_tokens": 300, "thinking": {"type": "adaptive", "display": "updates"}}
     snapshot = copy.deepcopy(messages)
+    thinking_snapshot = copy.deepcopy(optional_params["thinking"])
 
     result = cfg.transform_anthropic_messages_request(
         model="us.anthropic.claude-opus-4-7",
         messages=messages,
-        anthropic_messages_optional_request_params={"max_tokens": 300},
-        litellm_params=GenericLiteLLMParams(),
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
         headers={},
     )
 
-    assert result["messages"][1] == {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}
+    assert result["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "read /tmp/a.txt"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+        {"role": "user", "content": [{"type": "text", "text": "continue"}]},
+    ]
     assert messages == snapshot
+    assert optional_params["thinking"] == thinking_snapshot
 
 
-def test_bedrock_invoke_drops_message_left_with_empty_content():
+def test_bedrock_invoke_drop_params_refuses_to_drop_a_whole_message(monkeypatch):
+    import litellm
     from litellm.types.router import GenericLiteLLMParams
 
+    monkeypatch.setattr(litellm, "drop_params", False)
     cfg = AmazonAnthropicClaudeMessagesConfig()
     messages = [
         {"role": "user", "content": [{"type": "text", "text": "first"}]},
@@ -3488,18 +3527,66 @@ def test_bedrock_invoke_drops_message_left_with_empty_content():
         {"role": "user", "content": [{"type": "text", "text": "second"}]},
     ]
 
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        cfg.transform_anthropic_messages_request(
+            model="us.anthropic.claude-opus-4-7",
+            messages=messages,
+            anthropic_messages_optional_request_params={"max_tokens": 300},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+    assert "messages[1]" in str(exc_info.value)
+    assert len(messages) == 3
+
+
+def test_bedrock_invoke_global_drop_params_strips_extensions(monkeypatch):
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
     result = cfg.transform_anthropic_messages_request(
         model="us.anthropic.claude-opus-4-7",
-        messages=messages,
+        messages=[
+            {
+                "role": "assistant",
+                "output_config": {"effort": "high"},
+                "content": [{"type": "text", "text": "hi"}],
+            },
+        ],
         anthropic_messages_optional_request_params={"max_tokens": 300},
         litellm_params=GenericLiteLLMParams(),
         headers={},
     )
 
-    assert result["messages"] == [
-        {"role": "user", "content": [{"type": "text", "text": "first"}]},
-        {"role": "user", "content": [{"type": "text", "text": "second"}]},
-    ]
+    assert result["messages"] == [{"role": "assistant", "content": [{"type": "text", "text": "hi"}]}]
+
+
+def test_bedrock_invoke_litellm_params_drop_params_false_overrides_global(monkeypatch):
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+        cfg.transform_anthropic_messages_request(
+            model="us.anthropic.claude-opus-4-7",
+            messages=[
+                {
+                    "role": "assistant",
+                    "output_config": {"effort": "high"},
+                    "content": [{"type": "text", "text": "hi"}],
+                },
+            ],
+            anthropic_messages_optional_request_params={"max_tokens": 300},
+            litellm_params=GenericLiteLLMParams(drop_params=False),
+            headers={},
+        )
+
+    assert "messages[0].output_config" in str(exc_info.value)
 
 
 def test_bedrock_invoke_maps_unsupported_thinking_display_to_summarized():

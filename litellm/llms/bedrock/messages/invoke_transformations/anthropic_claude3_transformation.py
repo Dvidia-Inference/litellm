@@ -14,6 +14,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -619,12 +620,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
 
     @staticmethod
-    def _sanitize_messages_for_bedrock_invoke(anthropic_messages_request: dict[str, object]) -> None:
-        """Rebuild ``messages`` for the Bedrock Invoke schema: per-message
-        ``output_config`` and content blocks with unsupported ``type`` tags are
-        dropped, and a message left with an empty content list is dropped too.
-        The caller's message dicts are never mutated; the request's ``messages``
-        key is only reassigned when something changed."""
+    def _sanitize_messages_for_bedrock_invoke(
+        anthropic_messages_request: dict[str, object], model: str, drop_params: bool
+    ) -> None:
         messages: Final = anthropic_messages_request.get("messages")
         if not isinstance(messages, list):
             return
@@ -635,46 +633,75 @@ class AmazonAnthropicClaudeMessagesConfig(
             block_type: Final = block.get("type")
             return isinstance(block_type, str) and block_type in BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_CONTENT_BLOCK_TYPES
 
+        def _offenders(message_index: int, message: object) -> tuple[str, ...]:
+            if not isinstance(message, dict):
+                return ()
+            content: Final = message.get("content")
+            block_paths: Final = (
+                tuple(
+                    f"messages[{message_index}].content[{block_index}] (type '{block.get('type')}')"
+                    for block_index, block in enumerate(content)
+                    if _is_unsupported_block(block)
+                )
+                if isinstance(content, list)
+                else ()
+            )
+            return ((f"messages[{message_index}].output_config",) if "output_config" in message else ()) + block_paths
+
+        offenders: Final = tuple(path for i, m in enumerate(messages) for path in _offenders(i, m))
+        if not offenders:
+            return
+        if not drop_params:
+            raise litellm.UnsupportedParamsError(
+                message=(
+                    f"Bedrock Invoke does not accept {', '.join(offenders)}. "
+                    "Set `litellm_settings.drop_params: true` on the proxy or `litellm.drop_params = True` "
+                    "in the SDK to have LiteLLM strip them, or remove them from the request."
+                ),
+                model=model,
+                llm_provider="bedrock",
+            )
+        emptied: Final = tuple(
+            f"messages[{i}]"
+            for i, m in enumerate(messages)
+            if isinstance(m, dict)
+            and isinstance(m.get("content"), list)
+            and len(m["content"]) > 0
+            and all(_is_unsupported_block(b) for b in m["content"])
+        )
+        if emptied:
+            raise litellm.BadRequestError(
+                message=(
+                    f"{', '.join(emptied)} would be left with empty content after stripping: LiteLLM will not "
+                    "drop a whole message because that changes the conversation shape. "
+                    "Remove or rewrite the message."
+                ),
+                model=model,
+                llm_provider="bedrock",
+            )
+
         def _sanitize(message: object) -> object:
             if not isinstance(message, dict):
                 return message
-            cleaned: Final = {
+            cleaned: Final = {  # mutable-ok: outbound JSON body
                 k: v for k, v in message.items() if k != "output_config"
-            }  # mutable-ok: request-body JSON dict
+            }
             content: Final = message.get("content")
             if isinstance(content, list):
-                cleaned["content"] = [b for b in content if not _is_unsupported_block(b)]  # mutable-ok: JSON list
+                cleaned["content"] = [  # mutable-ok: outbound JSON body
+                    b for b in content if not _is_unsupported_block(b)
+                ]
             return cleaned
 
-        def _emptied_by_filter(message: object) -> bool:
-            if not isinstance(message, dict):
-                return False
-            content: Final = message.get("content")
-            return isinstance(content, list) and len(content) > 0 and all(_is_unsupported_block(b) for b in content)
-
-        kept: Final = [_sanitize(m) for m in messages if not _emptied_by_filter(m)]  # mutable-ok: JSON list
-        if kept == messages:
-            return
-        verbose_logger.debug(
-            "Bedrock Invoke: sanitized messages (output_config on indices %s, "
-            "unsupported content block types %s, emptied messages dropped at indices %s)",
-            tuple(i for i, m in enumerate(messages) if isinstance(m, dict) and "output_config" in m),
-            tuple(
-                b.get("type")
-                for m in messages
-                if isinstance(m, dict) and isinstance(m.get("content"), list)
-                for b in m["content"]
-                if _is_unsupported_block(b)
-            ),
-            tuple(i for i, m in enumerate(messages) if _emptied_by_filter(m)),
+        verbose_logger.warning(
+            "Dropping unsupported Bedrock Invoke message params %s for model=%s (drop_params=True)",
+            offenders,
+            model,
         )
-        anthropic_messages_request["messages"] = kept
+        anthropic_messages_request["messages"] = [_sanitize(m) for m in messages]  # mutable-ok: outbound JSON body
 
     @staticmethod
     def _normalize_thinking_display_for_bedrock_invoke(anthropic_messages_request: dict[str, object]) -> None:
-        """Map a ``thinking.display`` value Bedrock Invoke rejects onto
-        ``summarized``. The caller's ``thinking`` dict is replaced by a copy,
-        never mutated."""
         thinking: Final = anthropic_messages_request.get("thinking")
         if not isinstance(thinking, dict):
             return
@@ -685,10 +712,10 @@ class AmazonAnthropicClaudeMessagesConfig(
             "Bedrock Invoke: mapping unsupported thinking display %r to 'summarized'",
             display,
         )
-        anthropic_messages_request["thinking"] = {
+        anthropic_messages_request["thinking"] = {  # mutable-ok: outbound JSON body
             **thinking,
             "display": "summarized",
-        }  # mutable-ok: request-body JSON dict
+        }
 
     def _strip_unsupported_bedrock_invoke_fields(
         self,
@@ -769,7 +796,12 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)
         self._remove_ttl_from_cache_control(anthropic_messages_request=anthropic_messages_request, model=model)
-        self._sanitize_messages_for_bedrock_invoke(anthropic_messages_request)
+        resolved_drop_params: Final = normalize_drop_params(litellm_params.drop_params)
+        self._sanitize_messages_for_bedrock_invoke(
+            anthropic_messages_request,
+            model=model,
+            drop_params=resolved_drop_params if resolved_drop_params is not None else litellm.drop_params is True,
+        )
         self._normalize_thinking_display_for_bedrock_invoke(anthropic_messages_request)
 
         # 5. Route structured-output params (`output_format` /
