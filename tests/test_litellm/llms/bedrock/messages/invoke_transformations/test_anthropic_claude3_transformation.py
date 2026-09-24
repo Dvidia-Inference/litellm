@@ -3589,7 +3589,30 @@ def test_bedrock_invoke_litellm_params_drop_params_false_overrides_global(monkey
     assert "messages[0].output_config" in str(exc_info.value)
 
 
-def test_bedrock_invoke_maps_unsupported_thinking_display_to_summarized():
+def test_bedrock_invoke_rejects_unsupported_thinking_display_by_default(monkeypatch):
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+        cfg.transform_anthropic_messages_request(
+            model="us.anthropic.claude-opus-4-7",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 300,
+                "thinking": {"type": "adaptive", "display": "updates"},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert "thinking.display" in str(exc_info.value)
+    assert "drop_params" in str(exc_info.value)
+
+
+def test_bedrock_invoke_drop_params_drops_unsupported_thinking_display():
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -3600,12 +3623,44 @@ def test_bedrock_invoke_maps_unsupported_thinking_display_to_summarized():
         model="us.anthropic.claude-opus-4-7",
         messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
         anthropic_messages_optional_request_params=optional_params,
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(drop_params=True),
         headers={},
     )
 
-    assert result["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert result["thinking"] == {"type": "adaptive"}
     assert optional_params["thinking"] == snapshot
+
+
+def test_bedrock_invoke_rejection_names_message_and_thinking_paths(monkeypatch):
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+        cfg.transform_anthropic_messages_request(
+            model="us.anthropic.claude-opus-4-7",
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_addition", "tool_reference": {"type": "tool_reference", "tool_name": "Read"}},
+                        {"type": "text", "text": "ok"},
+                    ],
+                },
+            ],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 300,
+                "thinking": {"type": "adaptive", "display": "updates"},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert "thinking.display" in str(exc_info.value)
+    assert "messages[1].content[0]" in str(exc_info.value)
 
 
 def test_bedrock_invoke_passes_supported_thinking_display_through():
@@ -3670,10 +3725,9 @@ def test_bedrock_invoke_sanitizers_leave_non_json_object_shapes_alone(request_bo
         if isinstance(message, dict):
             message.pop("output_config", None)
 
-    AmazonAnthropicClaudeMessagesConfig._sanitize_messages_for_bedrock_invoke(
+    AmazonAnthropicClaudeMessagesConfig._sanitize_request_for_bedrock_invoke(
         request_body, model="us.anthropic.claude-opus-4-7", drop_params=True
     )
-    AmazonAnthropicClaudeMessagesConfig._normalize_thinking_display_for_bedrock_invoke(request_body)
 
     assert request_body == expected
     if "output_config" not in str(snapshot):

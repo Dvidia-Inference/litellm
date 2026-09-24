@@ -196,11 +196,31 @@ def test_per_message_output_config_is_dropped_before_bedrock_invoke_with_drop_pa
         assert sent["max_tokens"] == 300 and "model" not in sent, sent
 
 
-@pytest.mark.covers("providers.bedrock_invoke.messages.unsupported_thinking_display_is_mapped_to_summarized")
-def test_thinking_display_updates_is_mapped_to_summarized_for_bedrock_invoke(gateway: Gateway) -> None:
+@pytest.mark.covers("providers.bedrock_invoke.messages.unsupported_thinking_display_is_rejected_or_dropped")
+def test_thinking_display_updates_is_rejected_without_drop_params(gateway: Gateway) -> None:
     tag: Final = uuid.uuid4().hex
     with wire_server(bedrock_peer) as wire, gateway.scenario() as scenario:
         model: Final = _register(scenario, wire.url)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": 300,
+                "thinking": {"type": "adaptive", "display": "updates"},
+                "messages": [{"role": "user", "content": f"what is 2+2? think briefly {tag}"}],
+            },
+        )
+        assert response.status_code == 400, response.text
+        assert "thinking.display" in response.text and "drop_params" in response.text, response.text
+        assert wire.drain() == (), "rejected request must not reach Bedrock"
+
+
+@pytest.mark.covers("providers.bedrock_invoke.messages.unsupported_thinking_display_is_rejected_or_dropped")
+def test_thinking_display_updates_is_dropped_with_drop_params(gateway: Gateway) -> None:
+    tag: Final = uuid.uuid4().hex
+    with wire_server(bedrock_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _register(scenario, wire.url, drop_params=True)
         client: Final = anthropic.Anthropic(
             api_key=gateway.key, base_url=str(gateway.client.base_url).rstrip("/"), max_retries=0
         )
@@ -212,7 +232,7 @@ def test_thinking_display_updates_is_mapped_to_summarized_for_bedrock_invoke(gat
         )
         assert message.role == "assistant" and message.id == f"msg_{tag}", message
         sent: Final = _sent(wire.drain(), INVOKE)
-        assert sent["thinking"] == {"type": "adaptive", "display": "summarized"}, sent
+        assert sent["thinking"] == {"type": "adaptive"}, sent
         assert sent["messages"] == [{"role": "user", "content": f"what is 2+2? think briefly {tag}"}], sent
 
 
@@ -280,7 +300,7 @@ def test_all_three_extensions_are_sanitized_on_the_streaming_invoke_path(gateway
         ), response.text
         sent: Final = _sent(wire.drain(), INVOKE_STREAM)
         assert sent["messages"] == _without_extensions(turns), sent
-        assert sent["thinking"] == {"type": "adaptive", "display": "summarized"}, sent
+        assert sent["thinking"] == {"type": "adaptive"}, sent
         assert "tool_addition" not in json.dumps(sent) and "output_config" not in json.dumps(sent), sent
 
 

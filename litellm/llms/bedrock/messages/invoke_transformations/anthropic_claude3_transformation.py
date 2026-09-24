@@ -620,12 +620,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
 
     @staticmethod
-    def _sanitize_messages_for_bedrock_invoke(
+    def _sanitize_request_for_bedrock_invoke(
         anthropic_messages_request: dict[str, object], model: str, drop_params: bool
     ) -> None:
         messages: Final = anthropic_messages_request.get("messages")
-        if not isinstance(messages, list):
-            return
 
         def _is_unsupported_block(block: object) -> bool:
             if not isinstance(block, dict):
@@ -648,7 +646,18 @@ class AmazonAnthropicClaudeMessagesConfig(
             )
             return ((f"messages[{message_index}].output_config",) if "output_config" in message else ()) + block_paths
 
-        offenders: Final = tuple(path for i, m in enumerate(messages) for path in _offenders(i, m))
+        message_offenders: Final = (
+            tuple(path for i, m in enumerate(messages) for path in _offenders(i, m))
+            if isinstance(messages, list)
+            else ()
+        )
+        thinking: Final = anthropic_messages_request.get("thinking")
+        display: Final = cast(object, thinking.get("display") if isinstance(thinking, dict) else None)
+        offenders: Final = message_offenders + (
+            (f"thinking.display (value '{display}')",)
+            if isinstance(display, str) and display not in BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES
+            else ()
+        )
         if not offenders:
             return
         if not drop_params:
@@ -656,18 +665,23 @@ class AmazonAnthropicClaudeMessagesConfig(
                 message=(
                     f"Bedrock Invoke does not accept {', '.join(offenders)}. "
                     "Set `litellm_settings.drop_params: true` on the proxy or `litellm.drop_params = True` "
-                    "in the SDK to have LiteLLM strip them, or remove them from the request."
+                    "in the SDK to have LiteLLM drop them (an unsupported thinking.display falls back to the "
+                    "model default), or remove them from the request."
                 ),
                 model=model,
                 llm_provider="bedrock",
             )
-        emptied: Final = tuple(
-            f"messages[{i}]"
-            for i, m in enumerate(messages)
-            if isinstance(m, dict)
-            and isinstance(m.get("content"), list)
-            and len(m["content"]) > 0
-            and all(_is_unsupported_block(b) for b in m["content"])
+        emptied: Final = (
+            tuple(
+                f"messages[{i}]"
+                for i, m in enumerate(messages)
+                if isinstance(m, dict)
+                and isinstance(m.get("content"), list)
+                and len(m["content"]) > 0
+                and all(_is_unsupported_block(b) for b in m["content"])
+            )
+            if isinstance(messages, list)
+            else ()
         )
         if emptied:
             raise litellm.BadRequestError(
@@ -698,24 +712,16 @@ class AmazonAnthropicClaudeMessagesConfig(
             offenders,
             model,
         )
-        anthropic_messages_request["messages"] = [_sanitize(m) for m in messages]  # mutable-ok: outbound JSON body
-
-    @staticmethod
-    def _normalize_thinking_display_for_bedrock_invoke(anthropic_messages_request: dict[str, object]) -> None:
-        thinking: Final = anthropic_messages_request.get("thinking")
-        if not isinstance(thinking, dict):
-            return
-        display: Final = thinking.get("display")
-        if not isinstance(display, str) or display in BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES:
-            return
-        verbose_logger.debug(
-            "Bedrock Invoke: mapping unsupported thinking display %r to 'summarized'",
-            display,
-        )
-        anthropic_messages_request["thinking"] = {  # mutable-ok: outbound JSON body
-            **thinking,
-            "display": "summarized",
-        }
+        if isinstance(messages, list):
+            anthropic_messages_request["messages"] = [_sanitize(m) for m in messages]  # mutable-ok: outbound JSON body
+        if (
+            isinstance(thinking, dict)
+            and isinstance(display, str)
+            and display not in BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES
+        ):
+            anthropic_messages_request["thinking"] = {  # mutable-ok: outbound JSON body
+                k: v for k, v in thinking.items() if k != "display"
+            }
 
     def _strip_unsupported_bedrock_invoke_fields(
         self,
@@ -802,12 +808,11 @@ class AmazonAnthropicClaudeMessagesConfig(
             else litellm_params.get("drop_params")
         )
         resolved_drop_params: Final = normalize_drop_params(configured_drop_params)
-        self._sanitize_messages_for_bedrock_invoke(
+        self._sanitize_request_for_bedrock_invoke(
             anthropic_messages_request,
             model=model,
             drop_params=resolved_drop_params if resolved_drop_params is not None else litellm.drop_params is True,
         )
-        self._normalize_thinking_display_for_bedrock_invoke(anthropic_messages_request)
 
         # 5. Route structured-output params (`output_format` /
         # `output_config.format`) to native enforcement or the inline-schema

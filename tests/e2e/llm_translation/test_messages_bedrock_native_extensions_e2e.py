@@ -113,7 +113,7 @@ class TestBedrockMessagesNativeExtensions:
         assert _text(message).strip(), f"/v1/messages returned no text: {message.content!r}"
 
     @pytest.mark.covers("llm.messages.bedrock_invoke.native_extensions.nonstream.works")
-    def test_thinking_display_updates_mapped(
+    def test_drop_params_drops_thinking_display_updates(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         model, key = _register(proxy, resources, drop_params=True)
@@ -162,18 +162,19 @@ class TestBedrockMessagesNativeExtensions:
         _assert_actionable_error(exc_info.value)
 
     @pytest.mark.covers("llm.messages.bedrock_invoke.native_extensions.nonstream.works")
-    def test_thinking_display_updates_mapped_without_drop_params(
+    def test_thinking_display_updates_rejected_with_actionable_error(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         model, key = _register(proxy, resources, drop_params=False)
         client = sdk.anthropic(key)
 
-        message = client.messages.create(
-            model=model,
-            max_tokens=300,
-            thinking=cast(ThinkingConfigParam, {"type": "adaptive", "display": "updates"}),
-            messages=[{"role": "user", "content": "what is 2+2? think briefly"}],
-            extra_body=NO_PROXY_CACHE,
-        )
-        assert message.role == "assistant", f"unexpected role: {message.role!r}"
-        assert _text(message).strip(), f"/v1/messages returned no text: {message.content!r}"
+        with pytest.raises(anthropic.BadRequestError) as exc_info:
+            client.messages.create(
+                model=model,
+                max_tokens=300,
+                thinking=cast(ThinkingConfigParam, {"type": "adaptive", "display": "updates"}),
+                messages=[{"role": "user", "content": "what is 2+2? think briefly"}],
+                extra_body=NO_PROXY_CACHE,
+            )
+        assert "thinking.display" in str(exc_info.value), str(exc_info.value)
+        assert "drop_params" in str(exc_info.value), str(exc_info.value)
