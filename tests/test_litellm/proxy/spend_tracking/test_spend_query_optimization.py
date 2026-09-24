@@ -571,13 +571,15 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
 
     emitted = [call[0] for call in mock_prisma.db.query_raw.call_args_list]
     page_sql = emitted[0][0]
-    assert f"GROUP BY {group_key}" in page_sql, f"page must select sessions, not calls. SQL was:\n{page_sql}"
+    assert "GROUP BY" not in page_sql, f"page must not aggregate the whole window. SQL was:\n{page_sql}"
+    assert "NOT EXISTS" in page_sql, f"page must filter to each session's newest row at row level. SQL was:\n{page_sql}"
     assert "OFFSET" not in page_sql, "the startTime page must be keyset-selected, not offset-selected"
     assert emitted[0][-1] == 51, "the page query fetches page_size + 1 sessions to detect has_more"
 
     count_call = emitted[1]
     count_sql = count_call[0]
-    assert f"GROUP BY {group_key}" in count_sql, f"grouped total must count sessions. SQL was:\n{count_sql}"
+    assert "GROUP BY" not in count_sql, f"grouped total must not aggregate the whole window. SQL was:\n{count_sql}"
+    assert "NOT EXISTS" in count_sql, f"grouped total must count head rows. SQL was:\n{count_sql}"
     assert "COUNT(*) OVER ()" not in count_sql
     assert "LIMIT" in count_sql and "FROM (" in count_sql, "the grouped count must stay bounded"
     assert count_call[-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1
