@@ -3006,7 +3006,7 @@ async def _fetch_session_representatives(
     return [rep_by_key[key] for key in session_keys if key in rep_by_key]  # mutable-ok: rows are enriched in place
 
 
-def _is_newest_row_of_its_session_sql(where_clause: str) -> str:
+def _newer_row_of_same_session_sql(where_clause: str) -> str:
     return f"""SELECT 1 AS hit
         FROM "LiteLLM_SpendLogs" AS newer
         WHERE newer.session_id = COALESCE(NULLIF(head.session_id, ''), head.request_id)
@@ -3099,7 +3099,7 @@ async def _ui_session_grouped_spend_logs(
                "startTime"::text AS last_activity
         FROM "LiteLLM_SpendLogs" AS head
         LEFT JOIN LATERAL (
-            {_is_newest_row_of_its_session_sql(where_clause)}
+            {_newer_row_of_same_session_sql(where_clause)}
         ) AS newer_hit ON TRUE
         WHERE {where_clause}
           AND newer_hit.hit IS NULL
