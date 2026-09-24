@@ -1921,6 +1921,54 @@
     "tests/integration/providers/test_bedrock_invoke_tool_search_wire.py::test_gen5_claude_bedrock_invoke_messages_tool_search_sends_bedrock_beta_field": [
       "providers.bedrock_invoke.tool_search_gen5_claude_sends_bedrock_beta_and_reports_support"
     ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_per_message_output_config_is_dropped_before_bedrock_invoke": [
+      "providers.bedrock_invoke.messages.per_message_output_config_is_dropped"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_thinking_display_updates_is_mapped_to_summarized_for_bedrock_invoke": [
+      "providers.bedrock_invoke.messages.unsupported_thinking_display_is_mapped_to_summarized"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_tool_addition_block_is_dropped_before_bedrock_invoke": [
+      "providers.bedrock_invoke.messages.tool_addition_block_is_dropped"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_all_three_extensions_are_sanitized_on_the_streaming_invoke_path": [
+      "providers.bedrock_invoke.messages.extensions_are_sanitized_on_the_streaming_path"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_message_holding_only_tool_addition_blocks_is_dropped_whole": [
+      "providers.bedrock_invoke.messages.message_emptied_by_tool_addition_filter_is_dropped"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_supported_or_absent_thinking_display_reaches_bedrock_unchanged[summarized]": [
+      "providers.bedrock_invoke.messages.supported_thinking_display_is_forwarded_unchanged"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_supported_or_absent_thinking_display_reaches_bedrock_unchanged[omitted]": [
+      "providers.bedrock_invoke.messages.supported_thinking_display_is_forwarded_unchanged"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_supported_or_absent_thinking_display_reaches_bedrock_unchanged[None]": [
+      "providers.bedrock_invoke.messages.supported_thinking_display_is_forwarded_unchanged"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_malformed_per_message_output_config_is_dropped_on_every_message[int]": [
+      "providers.bedrock_invoke.messages.malformed_per_message_output_config_is_dropped"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_malformed_per_message_output_config_is_dropped_on_every_message[list]": [
+      "providers.bedrock_invoke.messages.malformed_per_message_output_config_is_dropped"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_malformed_per_message_output_config_is_dropped_on_every_message[empty_string]": [
+      "providers.bedrock_invoke.messages.malformed_per_message_output_config_is_dropped"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_malformed_per_message_output_config_is_dropped_on_every_message[five_kb_string]": [
+      "providers.bedrock_invoke.messages.malformed_per_message_output_config_is_dropped"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_non_string_thinking_display_and_bare_string_blocks_are_forwarded_as_sent": [
+      "providers.bedrock_invoke.messages.non_string_display_and_string_blocks_are_forwarded_as_sent"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_anthropic_direct_deployment_forwards_the_extensions_verbatim": [
+      "providers.anthropic.messages.native_extensions_are_forwarded_verbatim"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_bedrock_invoke_chat_completions_are_untouched_by_the_messages_sanitizer": [
+      "providers.bedrock_invoke.chat_completions.untouched_by_messages_sanitizer"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_messages_native_extensions_wire.py::test_burst_survives_a_stalled_upstream_and_a_killed_worker_with_exactly_one_upstream_call_per_request": [
+      "providers.bedrock_invoke.messages.burst_with_stalled_upstream_and_killed_worker_calls_upstream_once_per_request"
+    ],
     "tests/integration/providers/test_bedrock_mantle_codex_input_wire.py::test_codex_agent_message_context_compaction_and_local_shell_call_reach_mantle_as_supported_items": [
       "other.provider_wire.bedrock_mantle.codex_history_items_reach_mantle_as_supported_types"
     ],
