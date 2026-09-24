@@ -796,7 +796,12 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)
         self._remove_ttl_from_cache_control(anthropic_messages_request=anthropic_messages_request, model=model)
-        resolved_drop_params: Final = normalize_drop_params(litellm_params.drop_params)
+        configured_drop_params: Final = (
+            litellm_params.drop_params
+            if isinstance(litellm_params, GenericLiteLLMParams)
+            else litellm_params.get("drop_params")
+        )
+        resolved_drop_params: Final = normalize_drop_params(configured_drop_params)
         self._sanitize_messages_for_bedrock_invoke(
             anthropic_messages_request,
             model=model,
