@@ -638,9 +638,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         def _sanitize(message: object) -> object:
             if not isinstance(message, dict):
                 return message
-            cleaned: Final = {
+            cleaned: Final = {  # mutable-ok: request-body JSON dict
                 k: v for k, v in message.items() if k != "output_config"
-            }  # mutable-ok: request-body JSON dict
+            }
             content: Final = message.get("content")
             if isinstance(content, list):
                 cleaned["content"] = [b for b in content if not _is_unsupported_block(b)]  # mutable-ok: JSON list
@@ -685,10 +685,10 @@ class AmazonAnthropicClaudeMessagesConfig(
             "Bedrock Invoke: mapping unsupported thinking display %r to 'summarized'",
             display,
         )
-        anthropic_messages_request["thinking"] = {
+        anthropic_messages_request["thinking"] = {  # mutable-ok: request-body JSON dict
             **thinking,
             "display": "summarized",
-        }  # mutable-ok: request-body JSON dict
+        }
 
     def _strip_unsupported_bedrock_invoke_fields(
         self,
