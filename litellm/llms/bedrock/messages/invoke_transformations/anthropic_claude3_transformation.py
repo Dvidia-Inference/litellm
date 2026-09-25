@@ -1,8 +1,9 @@
 from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, assert_never, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from typing_extensions import assert_never
 
 import litellm
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers

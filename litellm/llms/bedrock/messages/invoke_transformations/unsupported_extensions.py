@@ -2,9 +2,10 @@ import enum
 import types
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Annotated, Final, NoReturn, TypeAlias, assert_never
+from typing import Annotated, Final, NoReturn, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 import litellm
 from litellm.constants import (
