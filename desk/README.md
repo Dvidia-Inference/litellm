@@ -45,4 +45,36 @@ curl -s http://localhost:4000/v1/chat/completions \
 
 The gateway waits up to 95 seconds. Callers should set a 90 second timeout. If no machine claims the job, the pool returns an error and this proxy does not try again.
 
-A host with GPUs does not point the desk at this proxy. On the machine that runs LiteLLM, use the pool worker from [ow-terminal](https://github.com/Tarzelf/ow-terminal/blob/main/scripts/pool-worker.mjs). One process per `model_name`. It pulls the queue and calls this proxy with `LITELLM_KEY`.
+## Where this sits
+
+[dvidia.org](https://dvidia.org) is the house. [OpenWeights Terminal](https://owterminal.com) is the desk: the boards, and the pool that keeps the ledger and the queue. This fork is only the front door for callers who need a team key, a dollar budget, and a per-minute limit.
+
+There are two LiteLLM processes, and they are not the same one.
+
+| | This fork | LiteLLM on a GPU box |
+|---|---|---|
+| Who runs it | Us, when the gateway is up | The person who owns the machine |
+| Who it faces | A developer, with a virtual key | The pool worker on that same box |
+| What it calls | `https://owterminal.com/api/v1`, once, with one pool key | The weights on the DGX |
+| What it must not do | Pick a machine, or retry | Join the pool by itself |
+
+A call moves like this.
+
+```text
+developer
+  → this fork            virtual key, budget, requests per minute
+  → owterminal.com/api/v1
+  → the cheapest live machine for that model
+  → pool-worker on that box
+  → that box's own LiteLLM, or the engine itself
+  → the GPU
+```
+
+The worker is [scripts/pool-worker.mjs](https://github.com/Tarzelf/ow-terminal/blob/main/scripts/pool-worker.mjs) in the desk repo. It claims a job and calls the local LiteLLM with `LITELLM_KEY`. It does not call this fork. Pointing a DGX at `desk/proxy.yaml` would send the job back into the pool.
+
+Two prices, on purpose. This fork bills the caller $4 per million tokens when the name is abliterated, heretic, uncensored, or jailbreak, and $1 otherwise. The pool pays the host 80 percent of the offer that machine posted. Those amounts are not the same number. The gap is the margin. The host's LiteLLM does not set either of them.
+
+`dvidia-cli` is the reserved place for a host installer and a wallet. The repository is empty, so it is not on this path. A machine joins with the worker, or from the browser on [the app](https://owterminal.com/app).
+
+This gateway has no public hostname yet. Until `desk/compose.yaml` is running somewhere reachable, callers use the pool key directly. The rest of the path is written in [how the desk works](https://github.com/Tarzelf/ow-terminal/blob/main/docs/how-it-works.md).
+

@@ -18,7 +18,7 @@
     </p>
 <h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">LiteLLM Proxy Server (AI Gateway)</a> | <a href="https://docs.litellm.ai/docs/enterprise#hosted-litellm-proxy" target="_blank"> Hosted Proxy</a> | <a href="https://litellm.ai/enterprise"target="_blank">Enterprise Tier</a> | <a href="https://www.litellm.ai/ai-gateway" target="_blank">Website</a></h4>
 
-<p align="center"><b>Dvidia desk.</b> This fork is the caller gateway for <a href="https://owterminal.com">OpenWeights Terminal</a>, a product of <a href="https://dvidia.org">dvidia.org</a>. Keys, budgets, and throttles live here. The pool that picks the live machine does not. Read <a href="desk/README.md">desk/README.md</a> and <a href="https://github.com/Tarzelf/ow-terminal/blob/main/docs/how-it-works.md">how the desk works</a>. Upstream is <a href="https://github.com/BerriAI/litellm">BerriAI/litellm</a>.</p>
+<p align="center"><b>Dvidia desk.</b> This fork is the caller gateway for <a href="https://owterminal.com">OpenWeights Terminal</a>, a product of <a href="https://dvidia.org">dvidia.org</a>. It sits in front of the pool. It does not sit in front of a GPU. Keys, budgets, and throttles live here. The machine is chosen at <a href="https://owterminal.com">owterminal.com</a>. Read <a href="desk/README.md">where this sits</a>.</p>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
