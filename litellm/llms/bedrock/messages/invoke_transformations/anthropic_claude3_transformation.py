@@ -70,6 +70,57 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def _is_unsupported_bedrock_invoke_block(block: object) -> bool:
+    if not isinstance(block, dict):
+        return False
+    block_type: Final = block.get("type")
+    return isinstance(block_type, str) and block_type in BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_CONTENT_BLOCK_TYPES
+
+
+def _bedrock_invoke_param_offenders(message_index: int, message: object) -> tuple[str, ...]:
+    return (
+        (f"messages[{message_index}].output_config",)
+        if isinstance(message, dict) and "output_config" in message
+        else ()
+    )
+
+
+def _bedrock_invoke_block_offenders(message_index: int, message: object) -> tuple[str, ...]:
+    if not isinstance(message, dict):
+        return ()
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return ()
+    return tuple(
+        f"messages[{message_index}].content[{block_index}] (type '{block.get('type')}')"
+        for block_index, block in enumerate(content)
+        if _is_unsupported_bedrock_invoke_block(block)
+    )
+
+
+def _sanitize_bedrock_invoke_message(message: object, drop_params: bool, modify_params: bool) -> object:
+    if not isinstance(message, dict):
+        return message
+    cleaned: Final = {  # mutable-ok: outbound JSON body
+        k: v for k, v in message.items() if not (k == "output_config" and drop_params)
+    }
+    content: Final = message.get("content")
+    if isinstance(content, list) and modify_params:
+        remaining: Final = [  # mutable-ok: outbound JSON body
+            b for b in content if not _is_unsupported_bedrock_invoke_block(b)
+        ]
+        if remaining or not content:
+            cleaned["content"] = remaining
+        else:
+            cleaned["content"] = [  # mutable-ok: outbound JSON body
+                {  # mutable-ok: outbound JSON body
+                    "type": "text",
+                    "text": DEFAULT_USER_CONTINUE_MESSAGE["content"],
+                }
+            ]
+    return cleaned
+
+
 class AmazonAnthropicClaudeMessagesConfig(
     AnthropicMessagesConfig,
     AmazonInvokeConfig,
@@ -630,32 +681,6 @@ class AmazonAnthropicClaudeMessagesConfig(
         modify_params: bool,
     ) -> None:
         messages: Final = anthropic_messages_request.get("messages")
-
-        def _is_unsupported_block(block: object) -> bool:
-            if not isinstance(block, dict):
-                return False
-            block_type: Final = block.get("type")
-            return isinstance(block_type, str) and block_type in BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_CONTENT_BLOCK_TYPES
-
-        def _param_offenders(message_index: int, message: object) -> tuple[str, ...]:
-            return (
-                (f"messages[{message_index}].output_config",)
-                if isinstance(message, dict) and "output_config" in message
-                else ()
-            )
-
-        def _block_offenders(message_index: int, message: object) -> tuple[str, ...]:
-            if not isinstance(message, dict):
-                return ()
-            content: Final = message.get("content")
-            if not isinstance(content, list):
-                return ()
-            return tuple(
-                f"messages[{message_index}].content[{block_index}] (type '{block.get('type')}')"
-                for block_index, block in enumerate(content)
-                if _is_unsupported_block(block)
-            )
-
         thinking: Final = anthropic_messages_request.get("thinking")
         display: Final = (
             cast(  # cast-ok: thinking.get() on an untyped dict is partially unknown; only used after isinstance checks
@@ -663,7 +688,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             )
         )
         param_offenders: Final = (
-            tuple(path for i, m in enumerate(messages) for path in _param_offenders(i, m))
+            tuple(path for i, m in enumerate(messages) for path in _bedrock_invoke_param_offenders(i, m))
             if isinstance(messages, list)
             else ()
         ) + (
@@ -672,7 +697,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             else ()
         )
         block_offenders: Final = (
-            tuple(path for i, m in enumerate(messages) for path in _block_offenders(i, m))
+            tuple(path for i, m in enumerate(messages) for path in _bedrock_invoke_block_offenders(i, m))
             if isinstance(messages, list)
             else ()
         )
@@ -712,28 +737,6 @@ class AmazonAnthropicClaudeMessagesConfig(
                 llm_provider="bedrock",
             )
 
-        def _sanitize(message: object) -> object:
-            if not isinstance(message, dict):
-                return message
-            cleaned: Final = {  # mutable-ok: outbound JSON body
-                k: v for k, v in message.items() if not (k == "output_config" and drop_params)
-            }
-            content: Final = message.get("content")
-            if isinstance(content, list) and modify_params:
-                remaining: Final = [  # mutable-ok: outbound JSON body
-                    b for b in content if not _is_unsupported_block(b)
-                ]
-                if remaining or not content:
-                    cleaned["content"] = remaining
-                else:
-                    cleaned["content"] = [  # mutable-ok: outbound JSON body
-                        {  # mutable-ok: outbound JSON body
-                            "type": "text",
-                            "text": DEFAULT_USER_CONTINUE_MESSAGE["content"],
-                        }
-                    ]
-            return cleaned
-
         verbose_logger.warning(
             "Dropping unsupported Bedrock Invoke request parts %s for model=%s (drop_params=%s, modify_params=%s)",
             (param_offenders if drop_params else ()) + (block_offenders if modify_params else ()),
@@ -742,7 +745,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             modify_params,
         )
         if isinstance(messages, list):
-            anthropic_messages_request["messages"] = [_sanitize(m) for m in messages]  # mutable-ok: outbound JSON body
+            anthropic_messages_request["messages"] = [  # mutable-ok: outbound JSON body
+                _sanitize_bedrock_invoke_message(m, drop_params, modify_params) for m in messages
+            ]
         if (
             drop_params
             and isinstance(thinking, dict)
