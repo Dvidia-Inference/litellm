@@ -40,3 +40,5 @@ curl -s http://localhost:4000/v1/chat/completions \
 ```
 
 The gateway waits up to 25 seconds. If no machine claims the job, the pool returns 504 and this proxy does not try again.
+
+A host does not configure this proxy. On [the app](https://owterminal.com/app), under **I have a machine**, pick Ollama, llama.cpp, LM Studio, or the engine behind a local LiteLLM. The tab calls that engine with no bearer token, so port 4000 is the wrong target.
