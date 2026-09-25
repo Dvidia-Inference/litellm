@@ -1,6 +1,8 @@
+![OpenWeights Terminal, a product of dvidia.org](header.jpg)
+
 # Desk
 
-This fork is the caller gateway for [OpenWeights Terminal](https://owterminal.com). Upstream remains [BerriAI/litellm](https://github.com/BerriAI/litellm). Our changes stay in `desk/` so the proxy can be merged forward.
+This fork is the caller gateway for [OpenWeights Terminal](https://owterminal.com), a product of [dvidia.org](https://dvidia.org). Upstream remains [BerriAI/litellm](https://github.com/BerriAI/litellm). Our changes stay in `desk/` so the proxy can be merged forward.
 
 LiteLLM holds the virtual key, the dollar budget, and the per-minute limit. The pool holds the machines. A host does not publish a URL. This proxy calls `OWT_API_BASE` once, with one pool key, and records what the caller owes.
 
