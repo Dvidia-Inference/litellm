@@ -74,8 +74,8 @@ def _text(message: Message) -> str:
     return "".join(block.text for block in message.content if isinstance(block, TextBlock))
 
 
-def _assert_actionable_error(error: anthropic.BadRequestError) -> None:
-    assert "drop_params" in str(error), str(error)
+def _assert_actionable_error(error: anthropic.BadRequestError, *, knob: str) -> None:
+    assert knob in str(error), str(error)
     assert "messages[" in str(error), str(error)
 
 
@@ -97,20 +97,20 @@ class TestBedrockMessagesNativeExtensions:
         assert _text(message).strip(), f"/v1/messages returned no text: {message.content!r}"
 
     @pytest.mark.covers("llm.messages.bedrock_invoke.native_extensions.nonstream.works")
-    def test_drop_params_strips_tool_addition_block(
+    def test_drop_params_alone_does_not_remove_tool_addition_block(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         model, key = _register(proxy, resources, drop_params=True)
         client = sdk.anthropic(key)
 
-        message = client.messages.create(
-            model=model,
-            max_tokens=300,
-            messages=_tool_addition_messages(),
-            extra_body=NO_PROXY_CACHE,
-        )
-        assert message.role == "assistant", f"unexpected role: {message.role!r}"
-        assert _text(message).strip(), f"/v1/messages returned no text: {message.content!r}"
+        with pytest.raises(anthropic.BadRequestError) as exc_info:
+            client.messages.create(
+                model=model,
+                max_tokens=300,
+                messages=_tool_addition_messages(),
+                extra_body=NO_PROXY_CACHE,
+            )
+        _assert_actionable_error(exc_info.value, knob="modify_params")
 
     @pytest.mark.covers("llm.messages.bedrock_invoke.native_extensions.nonstream.works")
     def test_drop_params_drops_thinking_display_updates(
@@ -143,7 +143,7 @@ class TestBedrockMessagesNativeExtensions:
                 messages=_output_config_messages(),
                 extra_body=NO_PROXY_CACHE,
             )
-        _assert_actionable_error(exc_info.value)
+        _assert_actionable_error(exc_info.value, knob="drop_params")
 
     @pytest.mark.covers("llm.messages.bedrock_invoke.native_extensions.nonstream.works")
     def test_tool_addition_block_rejected_with_actionable_error(
@@ -159,7 +159,7 @@ class TestBedrockMessagesNativeExtensions:
                 messages=_tool_addition_messages(),
                 extra_body=NO_PROXY_CACHE,
             )
-        _assert_actionable_error(exc_info.value)
+        _assert_actionable_error(exc_info.value, knob="modify_params")
 
     @pytest.mark.covers("llm.messages.bedrock_invoke.native_extensions.nonstream.works")
     def test_thinking_display_updates_rejected_with_actionable_error(

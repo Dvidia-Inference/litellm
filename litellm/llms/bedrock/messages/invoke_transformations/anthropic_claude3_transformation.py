@@ -16,6 +16,9 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    DEFAULT_USER_CONTINUE_MESSAGE,
+)
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     AnthropicConfig,
@@ -621,7 +624,10 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     @staticmethod
     def _sanitize_request_for_bedrock_invoke(
-        anthropic_messages_request: dict[str, object], model: str, drop_params: bool
+        anthropic_messages_request: dict[str, object],
+        model: str,
+        drop_params: bool,
+        modify_params: bool,
     ) -> None:
         messages: Final = anthropic_messages_request.get("messages")
 
@@ -631,69 +637,77 @@ class AmazonAnthropicClaudeMessagesConfig(
             block_type: Final = block.get("type")
             return isinstance(block_type, str) and block_type in BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_CONTENT_BLOCK_TYPES
 
-        def _offenders(message_index: int, message: object) -> tuple[str, ...]:
+        def _param_offenders(message_index: int, message: object) -> tuple[str, ...]:
+            return (
+                (f"messages[{message_index}].output_config",)
+                if isinstance(message, dict) and "output_config" in message
+                else ()
+            )
+
+        def _block_offenders(message_index: int, message: object) -> tuple[str, ...]:
             if not isinstance(message, dict):
                 return ()
             content: Final = message.get("content")
-            block_paths: Final = (
-                tuple(
-                    f"messages[{message_index}].content[{block_index}] (type '{block.get('type')}')"
-                    for block_index, block in enumerate(content)
-                    if _is_unsupported_block(block)
-                )
-                if isinstance(content, list)
-                else ()
+            if not isinstance(content, list):
+                return ()
+            return tuple(
+                f"messages[{message_index}].content[{block_index}] (type '{block.get('type')}')"
+                for block_index, block in enumerate(content)
+                if _is_unsupported_block(block)
             )
-            return ((f"messages[{message_index}].output_config",) if "output_config" in message else ()) + block_paths
 
-        message_offenders: Final = (
-            tuple(path for i, m in enumerate(messages) for path in _offenders(i, m))
-            if isinstance(messages, list)
-            else ()
-        )
         thinking: Final = anthropic_messages_request.get("thinking")
         display: Final = (
             cast(  # cast-ok: thinking.get() on an untyped dict is partially unknown; only used after isinstance checks
                 object, thinking.get("display") if isinstance(thinking, dict) else None
             )
         )
-        offenders: Final = message_offenders + (
+        param_offenders: Final = (
+            tuple(path for i, m in enumerate(messages) for path in _param_offenders(i, m))
+            if isinstance(messages, list)
+            else ()
+        ) + (
             (f"thinking.display (value '{display}')",)
             if isinstance(display, str) and display not in BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES
             else ()
         )
-        if not offenders:
-            return
-        if not drop_params:
-            raise litellm.UnsupportedParamsError(
-                message=(
-                    f"Bedrock Invoke does not accept {', '.join(offenders)}. "
-                    "Set `litellm_settings.drop_params: true` on the proxy or `litellm.drop_params = True` "
-                    "in the SDK to have LiteLLM drop them (an unsupported thinking.display falls back to the "
-                    "model default), or remove them from the request."
-                ),
-                model=model,
-                llm_provider="bedrock",
-            )
-        emptied: Final = (
-            tuple(
-                f"messages[{i}]"
-                for i, m in enumerate(messages)
-                if isinstance(m, dict)
-                and isinstance(m.get("content"), list)
-                and len(m["content"]) > 0
-                and all(_is_unsupported_block(b) for b in m["content"])
-            )
+        block_offenders: Final = (
+            tuple(path for i, m in enumerate(messages) for path in _block_offenders(i, m))
             if isinstance(messages, list)
             else ()
         )
-        if emptied:
+        if not param_offenders and not block_offenders:
+            return
+
+        param_error: Final = (
+            f"Bedrock Invoke does not accept {', '.join(param_offenders)}. "
+            "Set `litellm_settings.drop_params: true` on the proxy or `litellm.drop_params = True` "
+            "in the SDK to have LiteLLM drop them (an unsupported thinking.display falls back to the "
+            "model default), or remove them from the request."
+        )
+        block_error: Final = (
+            f"Bedrock Invoke does not accept {', '.join(block_offenders)}. "
+            "Set `litellm_settings.modify_params: true` on the proxy or `litellm.modify_params = True` "
+            "in the SDK to have LiteLLM remove those blocks (a message left empty gets the placeholder "
+            f"text '{DEFAULT_USER_CONTINUE_MESSAGE['content']}'), or remove them from the request."
+        )
+        param_blocked: Final = bool(param_offenders) and not drop_params
+        block_blocked: Final = bool(block_offenders) and not modify_params
+        if param_blocked and block_blocked:
+            raise litellm.UnsupportedParamsError(
+                message=f"{param_error} {block_error}",
+                model=model,
+                llm_provider="bedrock",
+            )
+        if param_blocked:
+            raise litellm.UnsupportedParamsError(
+                message=param_error,
+                model=model,
+                llm_provider="bedrock",
+            )
+        if block_blocked:
             raise litellm.BadRequestError(
-                message=(
-                    f"{', '.join(emptied)} would be left with empty content after stripping: LiteLLM will not "
-                    "drop a whole message because that changes the conversation shape. "
-                    "Remove or rewrite the message."
-                ),
+                message=block_error,
                 model=model,
                 llm_provider="bedrock",
             )
@@ -702,24 +716,36 @@ class AmazonAnthropicClaudeMessagesConfig(
             if not isinstance(message, dict):
                 return message
             cleaned: Final = {  # mutable-ok: outbound JSON body
-                k: v for k, v in message.items() if k != "output_config"
+                k: v for k, v in message.items() if not (k == "output_config" and drop_params)
             }
             content: Final = message.get("content")
-            if isinstance(content, list):
-                cleaned["content"] = [  # mutable-ok: outbound JSON body
+            if isinstance(content, list) and modify_params:
+                remaining: Final = [  # mutable-ok: outbound JSON body
                     b for b in content if not _is_unsupported_block(b)
                 ]
+                if remaining or not content:
+                    cleaned["content"] = remaining
+                else:
+                    cleaned["content"] = [  # mutable-ok: outbound JSON body
+                        {  # mutable-ok: outbound JSON body
+                            "type": "text",
+                            "text": DEFAULT_USER_CONTINUE_MESSAGE["content"],
+                        }
+                    ]
             return cleaned
 
         verbose_logger.warning(
-            "Dropping unsupported Bedrock Invoke message params %s for model=%s (drop_params=True)",
-            offenders,
+            "Dropping unsupported Bedrock Invoke request parts %s for model=%s (drop_params=%s, modify_params=%s)",
+            (param_offenders if drop_params else ()) + (block_offenders if modify_params else ()),
             model,
+            drop_params,
+            modify_params,
         )
         if isinstance(messages, list):
             anthropic_messages_request["messages"] = [_sanitize(m) for m in messages]  # mutable-ok: outbound JSON body
         if (
-            isinstance(thinking, dict)
+            drop_params
+            and isinstance(thinking, dict)
             and isinstance(display, str)
             and display not in BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES
         ):
@@ -816,6 +842,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request,
             model=model,
             drop_params=resolved_drop_params if resolved_drop_params is not None else litellm.drop_params is True,
+            modify_params=litellm.modify_params is True,
         )
 
         # 5. Route structured-output params (`output_format` /

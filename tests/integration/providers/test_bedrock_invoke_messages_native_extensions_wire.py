@@ -61,7 +61,12 @@ def _without_extensions(messages: list[dict[str, JsonValue]]) -> list[dict[str, 
         }
         for message in messages
     )
-    return [message for message in cleaned if message.get("content") != []]
+    return [
+        {**message, "content": [{"type": "text", "text": "Please continue."}]}
+        if message.get("content") == []
+        else message
+        for message in cleaned
+    ]
 
 
 def _first_tag(body: dict[str, JsonValue]) -> str:
@@ -236,34 +241,34 @@ def test_thinking_display_updates_is_dropped_with_drop_params(gateway: Gateway) 
         assert sent["messages"] == [{"role": "user", "content": f"what is 2+2? think briefly {tag}"}], sent
 
 
-@pytest.mark.covers("providers.bedrock_invoke.messages.tool_addition_block_is_rejected_without_drop_params")
-def test_tool_addition_block_is_rejected_with_actionable_error_without_drop_params(gateway: Gateway) -> None:
+@pytest.mark.covers("providers.bedrock_invoke.messages.tool_addition_block_is_rejected_without_modify_params")
+def test_tool_addition_block_is_rejected_with_actionable_error_without_modify_params(gateway: Gateway) -> None:
     tag: Final = uuid.uuid4().hex
     with wire_server(bedrock_peer) as wire, gateway.scenario() as scenario:
-        model: Final = _register(scenario, wire.url)
+        model: Final = _register(scenario, wire.url, drop_params=True)
         response: Final = gateway.request(
             "POST", "/v1/messages", {"model": model, "max_tokens": 300, "messages": _tool_addition_turns(tag)}
         )
         assert response.status_code == 400, response.text
-        assert "messages[1].content[0]" in response.text and "drop_params" in response.text, response.text
+        assert "messages[1].content[0]" in response.text and "modify_params" in response.text, response.text
         assert wire.drain() == (), "rejected request must not reach Bedrock"
 
 
-@pytest.mark.covers("providers.bedrock_invoke.messages.tool_addition_block_is_dropped_with_drop_params")
-@pytest.mark.asyncio
-async def test_tool_addition_block_is_dropped_before_bedrock_invoke_with_drop_params(gateway: Gateway) -> None:
+@pytest.mark.covers("providers.bedrock_invoke.messages.tool_addition_block_is_removed_with_modify_params")
+def test_tool_addition_block_is_removed_before_bedrock_invoke_with_modify_params(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     tag: Final = uuid.uuid4().hex
-    with wire_server(bedrock_peer) as wire, gateway.scenario() as scenario:
-        model: Final = _register(scenario, wire.url, drop_params=True)
-        async with anthropic.AsyncAnthropic(
-            api_key=gateway.key, base_url=str(gateway.client.base_url).rstrip("/"), max_retries=0
-        ) as client:
-            message: Final = await client.messages.create(
-                model=model,
-                max_tokens=300,
-                messages=_tool_addition_turns(tag),  # pyright: ignore[reportArgumentType]  # tool_addition is not in the SDK's block union
-            )
-        assert message.id == f"msg_{tag}", message
+    with (
+        wire_server(bedrock_peer) as wire,
+        owned_proxy_process(gateway, tmp_path, {"LITELLM_MODIFY_PARAMS": "True"}) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        model: Final = _register(scenario, wire.url)
+        response: Final = owned.gateway.request(
+            "POST", "/v1/messages", {"model": model, "max_tokens": 300, "messages": _tool_addition_turns(tag)}
+        )
+        assert response.status_code == 200, response.text
         sent: Final = _sent(wire.drain(), INVOKE)
         assert sent["messages"] == [
             {"role": "user", "content": f"read /tmp/a.txt {tag}"},
@@ -273,12 +278,16 @@ async def test_tool_addition_block_is_dropped_before_bedrock_invoke_with_drop_pa
 
 
 @pytest.mark.covers("providers.bedrock_invoke.messages.extensions_are_sanitized_on_the_streaming_path")
-def test_all_three_extensions_are_sanitized_on_the_streaming_invoke_path(gateway: Gateway) -> None:
+def test_all_three_extensions_are_sanitized_on_the_streaming_invoke_path(gateway: Gateway, tmp_path: Path) -> None:
     tag: Final = uuid.uuid4().hex
     turns: Final = _output_config_turns(tag) + _tool_addition_turns(tag)[1:]
-    with wire_server(bedrock_peer) as wire, gateway.scenario() as scenario:
+    with (
+        wire_server(bedrock_peer) as wire,
+        owned_proxy_process(gateway, tmp_path, {"LITELLM_MODIFY_PARAMS": "True"}) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
         model: Final = _register(scenario, wire.url, drop_params=True)
-        response: Final = gateway.request(
+        response: Final = owned.gateway.request(
             "POST",
             "/v1/messages",
             {
@@ -304,22 +313,29 @@ def test_all_three_extensions_are_sanitized_on_the_streaming_invoke_path(gateway
         assert "tool_addition" not in json.dumps(sent) and "output_config" not in json.dumps(sent), sent
 
 
-@pytest.mark.covers("providers.bedrock_invoke.messages.message_emptied_by_tool_addition_filter_is_rejected")
-def test_message_holding_only_tool_addition_blocks_is_rejected_even_with_drop_params(gateway: Gateway) -> None:
+@pytest.mark.covers("providers.bedrock_invoke.messages.message_emptied_by_tool_addition_filter_gets_placeholder_text")
+def test_message_holding_only_tool_addition_blocks_gets_the_placeholder_text(gateway: Gateway, tmp_path: Path) -> None:
     tag: Final = uuid.uuid4().hex
     turns: Final = [
         {"role": "user", "content": f"read /tmp/a.txt {tag}"},
         {"role": "assistant", "content": [TOOL_ADDITION, TOOL_ADDITION]},
         {"role": "user", "content": "continue"},
     ]
-    with wire_server(bedrock_peer) as wire, gateway.scenario() as scenario:
-        model: Final = _register(scenario, wire.url, drop_params=True)
-        response: Final = gateway.request(
+    with (
+        wire_server(bedrock_peer) as wire,
+        owned_proxy_process(gateway, tmp_path, {"LITELLM_MODIFY_PARAMS": "True"}) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        model: Final = _register(scenario, wire.url)
+        response: Final = owned.gateway.request(
             "POST", "/v1/messages", {"model": model, "max_tokens": 300, "messages": turns}
         )
-        assert response.status_code == 400, response.text
-        assert "messages[1]" in response.text, response.text
-        assert wire.drain() == (), "rejected request must not reach Bedrock"
+        assert response.status_code == 200, response.text
+        sent: Final = _sent(wire.drain(), INVOKE)
+        assert sent["messages"][1] == {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Please continue."}],
+        }, sent
 
 
 @pytest.mark.covers("providers.bedrock_invoke.messages.supported_thinking_display_is_forwarded_unchanged")
@@ -470,7 +486,7 @@ def test_burst_survives_a_stalled_upstream_and_a_killed_worker_with_exactly_one_
 
     with (
         wire_server(stalling_peer) as wire,
-        owned_proxy_process(gateway, tmp_path, {}, workers=2) as owned,
+        owned_proxy_process(gateway, tmp_path, {"LITELLM_MODIFY_PARAMS": "True"}, workers=2) as owned,
         owned.gateway.scenario() as scenario,
     ):
         model: Final = _register(scenario, wire.url, drop_params=True)
