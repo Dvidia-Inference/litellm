@@ -42,7 +42,7 @@ def _post(model: str, messages: list, api_base: str | None, api_key: str | None,
             url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": _name(model), "messages": messages, "stream": False},
-            timeout=timeout or 25,
+            timeout=timeout or 95,
         )
     except httpx.TimeoutException as err:
         raise CustomLLMError(status_code=504, message="The pool did not answer in time") from err

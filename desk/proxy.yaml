@@ -1,0 +1,25 @@
+# Caller gateway. Any live weight is owterminal/<model id>.
+# A liberated name is $4 per million tokens here. A list name is $1.
+# The pool still picks the machine and pays the host its own offer.
+# num_retries is 0 because a second try would start a second job.
+
+model_list:
+  - model_name: "owterminal/*"
+    litellm_params:
+      model: "owterminal/*"
+      api_base: os.environ/OWT_API_BASE
+      api_key: os.environ/OWT_API_KEY
+      timeout: 95
+      rpm: 600
+
+litellm_settings:
+  drop_params: true
+  num_retries: 0
+  request_timeout: 95
+  custom_provider_map:
+    - provider: owterminal
+      custom_handler: handler.owterminal
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
