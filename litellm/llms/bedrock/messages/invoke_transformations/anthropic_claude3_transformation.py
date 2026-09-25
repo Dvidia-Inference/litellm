@@ -3,7 +3,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, assert_never, cast
 
 import httpx
-from pydantic import JsonValue
 
 import litellm
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
@@ -47,6 +46,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.unsupported_extensions
     OptIns,
     Refused,
     Sanitized,
+    Unchanged,
     raise_refusal,
     sanitize_for_bedrock_invoke,
 )
@@ -626,18 +626,6 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
 
     @staticmethod
-    def _materialize_bedrock_invoke_json(value: object) -> object:
-        if isinstance(value, Mapping):
-            return {  # mutable-ok: outbound JSON body
-                k: AmazonAnthropicClaudeMessagesConfig._materialize_bedrock_invoke_json(v) for k, v in value.items()
-            }
-        if isinstance(value, (list, tuple)):
-            return [  # mutable-ok: outbound JSON body
-                AmazonAnthropicClaudeMessagesConfig._materialize_bedrock_invoke_json(v) for v in value
-            ]
-        return value
-
-    @staticmethod
     def _sanitize_request_for_bedrock_invoke(
         anthropic_messages_request: dict[str, object],
         model: str,
@@ -645,30 +633,21 @@ class AmazonAnthropicClaudeMessagesConfig(
         modify_params: bool,
     ) -> None:
         outcome: Final = sanitize_for_bedrock_invoke(
-            cast(  # cast-ok: the request dict is JSON-shaped but annotated object-wide
-                Mapping[str, JsonValue], anthropic_messages_request
-            ),
+            anthropic_messages_request,
             OptIns(drop_params=drop_params, modify_params=modify_params),
         )
         match outcome:
+            case Unchanged():
+                return
             case Refused() as refused:
                 raise_refusal(refused, model=model)
             case Sanitized() as sanitized:
-                if sanitized.removed:
-                    verbose_logger.warning(
-                        "Dropping unsupported Bedrock Invoke request parts %s for model=%s",
-                        tuple(offender.path for offender in sanitized.removed),
-                        model,
-                    )
-                if sanitized.messages is not None:
-                    anthropic_messages_request["messages"] = [  # mutable-ok: outbound JSON body
-                        AmazonAnthropicClaudeMessagesConfig._materialize_bedrock_invoke_json(message)
-                        for message in sanitized.messages
-                    ]
-                if sanitized.thinking is not None:
-                    anthropic_messages_request["thinking"] = (
-                        AmazonAnthropicClaudeMessagesConfig._materialize_bedrock_invoke_json(sanitized.thinking)
-                    )
+                verbose_logger.warning(
+                    "Dropping unsupported Bedrock Invoke request parts %s for model=%s",
+                    tuple(offender.path for offender in sanitized.removed),
+                    model,
+                )
+                anthropic_messages_request.update(sanitized.request)
             case _:
                 assert_never(outcome)
 

@@ -8,6 +8,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.unsupported_extensions
     OptIns,
     Refused,
     Sanitized,
+    Unchanged,
     sanitize_for_bedrock_invoke,
 )
 
@@ -18,7 +19,6 @@ from litellm.llms.bedrock.messages.invoke_transformations.unsupported_extensions
         {"messages": "not a list", "thinking": "not a dict"},
         {"messages": ["bare string", 7, None], "thinking": {"type": "adaptive"}},
         {"messages": [{"role": "assistant", "content": ["bare string", 7, {"type": "text", "text": "ok"}]}]},
-        {"messages": [{"role": "assistant", "content": "plain string content", "output_config": {"effort": "high"}}]},
     ],
 )
 def test_sanitize_leaves_non_json_object_shapes_alone(request_body):
@@ -26,10 +26,21 @@ def test_sanitize_leaves_non_json_object_shapes_alone(request_body):
 
     outcome = sanitize_for_bedrock_invoke(request_body, OptIns(drop_params=True, modify_params=False))
 
+    assert isinstance(outcome, Unchanged)
+    assert request_body == snapshot
+
+
+def test_sanitize_drops_output_config_without_mutating_the_request():
+    request_body = {
+        "messages": [{"role": "assistant", "content": "plain string content", "output_config": {"effort": "high"}}],
+    }
+    snapshot = copy.deepcopy(request_body)
+
+    outcome = sanitize_for_bedrock_invoke(request_body, OptIns(drop_params=True, modify_params=False))
+
     assert isinstance(outcome, Sanitized)
     assert request_body == snapshot
-    for message in outcome.messages or ():
-        assert "output_config" not in message if isinstance(message, dict) else True
+    assert outcome.request["messages"] == [{"role": "assistant", "content": "plain string content"}]
 
 
 def test_opt_ins_allows_gates_each_knob_independently():
