@@ -2,20 +2,21 @@
 
 This fork is the caller gateway for [OpenWeights Terminal](https://owterminal.com). Upstream remains [BerriAI/litellm](https://github.com/BerriAI/litellm). Our changes stay in `desk/` so the proxy can be merged forward.
 
-LiteLLM already does the caller side: a virtual key, a hard budget, requests per minute, and a spend row in Postgres. The pool does the other half. A host does not publish a URL. The desk at `OWT_API_BASE` picks the cheapest live machine and bills that offer. This proxy does not try to be that router.
+LiteLLM holds the virtual key, the dollar budget, and the per-minute limit. The pool holds the machines. A host does not publish a URL. This proxy calls `OWT_API_BASE` once, with one pool key, and records what the caller owes.
+
+A model is `owterminal/<id>`, the same id the desk board uses. A name with abliterated, heretic, uncensored, or jailbreak in it is $4 per million tokens. Anything else is $1. That price is the caller's bill. It is not the host's offer. The pool pays the host from the offer on the live machine. Retries are off, because a retry would open a second job.
 
 ## Run
 
 ```bash
 cp desk/.env.example .env
-# fill LITELLM_MASTER_KEY, DATABASE_URL, OWT_API_KEY
+# LITELLM_MASTER_KEY, DATABASE_URL, OWT_API_KEY
+# OWT_API_BASE defaults to https://owterminal.com/api/v1
 docker compose -f desk/compose.yaml up
 ```
 
-Or, with the proxy installed:
-
 ```bash
-litellm --config desk/config.yaml --port 4000
+python desk/pricing_test.py
 ```
 
 ## A key
@@ -24,10 +25,10 @@ litellm --config desk/config.yaml --port 4000
 curl -s http://localhost:4000/key/generate \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"max_budget":10,"budget_duration":"30d","rpm_limit":60,"models":["qwen3.6-35b-a3b-abliterated"]}'
+  -d '{"max_budget":10,"budget_duration":"30d","rpm_limit":60,"models":["owterminal/*"]}'
 ```
 
-`max_budget` is US dollars. The key stops when the spend row crosses it. List weights are priced at $1 per million tokens. Abliterated, heretic, and uncensored weights are $4.
+`max_budget` is US dollars. The key stops when its spend row crosses it.
 
 ## A call
 
@@ -35,7 +36,7 @@ curl -s http://localhost:4000/key/generate \
 curl -s http://localhost:4000/v1/chat/completions \
   -H "Authorization: Bearer $VIRTUAL_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"qwen3.6-35b-a3b-abliterated","messages":[{"role":"user","content":"Say hi"}]}'
+  -d '{"model":"owterminal/qwen3.6-35b-a3b-abliterated","messages":[{"role":"user","content":"Say hi"}]}'
 ```
 
-That call is forwarded to the OpenWeights pool as an OpenAI-compatible request. To prefer a local engine, add a second deployment of the same `model_name` with `api_base` set to Ollama and a lower `input_cost_per_token`. Cost-based routing then picks the cheaper one. Leave it out until that engine is actually up. An empty base is not a deployment.
+The gateway waits up to 25 seconds. If no machine claims the job, the pool returns 504 and this proxy does not try again.

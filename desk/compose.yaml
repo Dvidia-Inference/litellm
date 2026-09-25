@@ -16,6 +16,8 @@ services:
       - .env
     volumes:
       - ./config.yaml:/app/config.yaml:ro
+      - ./handler.py:/app/handler.py:ro
+      - ./pricing.py:/app/pricing.py:ro
     depends_on:
       - db
 
